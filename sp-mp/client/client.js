@@ -1,20 +1,22 @@
 // sp-mp 客户端插件：伤害统计面板
 //
 // 目标：**完全不改安装里的任何文件**，只用宿主已经公开的东西——
+//   * `window.__SP__`（public/js/main.js 自己挂的 { store, net, data }）：`net.playerId` 就是自己的 playerId
 //   * `window.__SP_RUNNER__`（public/js/battle/runner.js 自己挂的调试入口）的只读查询：
 //       currentBattle() → { battleId, fieldId, kind, spec, time }
-//       ownerOps(ownerId, fieldId) → 自己场上的干员 [{ kind:'op', ownerId, defId, uid? }]
+//       ownerOps(ownerId, fieldId) → 自己场上的干员 [{ kind:'op', ownerId, defId, uid, items? }]
 //       unitIdOf(uid, ownerId, fieldId) → 它在**当前这场战斗**里的单位 id
-//       unitStats(unitId, fieldId) → 该单位的实时数值（协议 unitStatsEntry：hp / maxHp / atk / shields / …）
-//   * 服务器推给客户端的 `m.private` / `m.public`（本模块只**读** WebSocket 入站消息，不改协议、不回包）
+//       unitStats(unitId, fieldId) → 该单位的实时数值（协议 unitStatsEntry：hp / maxHp / atk / res / shields / …）
 //   * 宿主自己的 DOM 钩子 `.gm__corner`（左下角那排按钮）与 `.gm__fs`（全屏按钮）
 //
-// 伤害数字：宿主的 unitStatsEntry 不带战斗统计，所以这里按**每次刷新取 HP 增量**累加：
+// 伤害数字：宿主的 unitStatsEntry 只给实时属性，不给战斗统计，所以这里按**每次刷新取 HP 增量**累加：
 //   damage = Σ max(0, hpBefore − hpNow) − Σ max(0, 护盾Before − 护盾Now)
-// 依据是宿主自己的定义（server/sim/damage.js 头部注释）："伤害只统计从对方身上移除的生命值"，
-// 护盾吸收不算伤害。单位被打死、或者本场战斗结束，就停止累加（不会再读到它的数值）。
+// 依据是宿主自己的定义（server/sim/damage.js 头部注释）："伤害只统计从对方身上移除的生命值"，护盾吸收不算伤害。
+// 单位阵亡、或者本场战斗结束，就停止累加。
 //
-// 只统计**你自己场上的干员**：每个浏览器只模拟自己的战场（ARCHITECTURE §1），队友的战场在他们自己的浏览器里跑。
+// 伤害类型：宿主 runner 不暴露"按类型的伤害量"，所以面板给出的类型是**干员的主攻击类型**
+// （data/chess.json 的 `dmgType`：phys → 物理、arts → 法术、heal → 治疗），若技能/天赋文本里出现元素关键词
+// （灼燃 / 凋亡 / 神经 / 侵蚀）则额外标注该元素。面板底部明确写清这一点，不假装是实测分类。
 
 const POLL_MS = 250;
 const STYLE_ID = 'sp-mp-client-style';
@@ -38,32 +40,6 @@ function fmt(n) {
 
 const pct = (v) => `${(Math.max(0, Number(v) || 0) * 100).toFixed(1)}%`;
 
-/** 干员名 / 头像：优先用宿主 data.js；取不到就退回 id、不画头像（宿主结构变了也不影响面板）。 */
-function opName(defId) {
-  try {
-    const rec = hostLookup('chess', defId);
-    if (rec && rec.name) return rec.name;
-  } catch { /* ignore */ }
-  return defId || '?';
-}
-function opIcon(defId) {
-  try {
-    const store = hostData();
-    const assets = store && typeof store.get === 'function' ? store.get('assets') : null;
-    if (!assets) return null;
-    if (typeof store.avatarUrl === 'function') return store.avatarUrl(assets, defId) || null;
-    if (assets.avatars && typeof assets.avatars === 'object') return assets.avatars[defId] || null;
-  } catch { /* ignore */ }
-  return null;
-}
-function hostData() {
-  return globalThis.__SP_DATA__ || (globalThis.__SP__ && globalThis.__SP__.data) || null;
-}
-function hostLookup(kind, id) {
-  const store = hostData();
-  return store && typeof store.lookup === 'function' ? store.lookup(kind, id) : null;
-}
-
 const L = {
   title: '伤害统计',
   total: '总伤害',
@@ -71,59 +47,88 @@ const L = {
   taken: '承伤',
   heal: '治疗',
   damage: '伤害',
+  type: '类型',
   share: '占比',
   op: '干员',
   ready: '准备阶段：战斗开始后开始统计',
   noBoard: '本场战斗没有你的干员',
   noConn: '还没有连上对局',
-  note: '（伤害按干员生命值的减少量累计，护盾吸收不计入；治疗/击杀只在宿主提供时显示）',
+  byType: '类型构成',
+  note: '伤害＝干员生命值减少量（护盾吸收不计入；只统计你自己场上的干员）。类型按干员的主攻击类型标注，非逐次实测。',
 };
+
+const TYPE_NAME = { phys: '物理', arts: '法术', heal: '治疗', true: '真实', elemental: '元素' };
+const TYPE_CLASS = { phys: 'is-phys', arts: 'is-arts', heal: 'is-heal', true: 'is-true', elemental: 'is-elem' };
+const ELEMENT_WORDS = ['灼燃', '凋亡', '神经', '侵蚀'];
 
 export function start() {
   installStyle();
-  watchMessages();
+  watchBattle();
   installButtonLoop();
   setInterval(() => { if (open.value && panel && panel.isConnected) render(); }, POLL_MS);
 }
 
-// -------------------------------------------------------------------------------------------------------------
-// 1. 只读地嗅探服务器推给本客户端的消息
-// -------------------------------------------------------------------------------------------------------------
-
-const self = { playerId: null, phase: null, round: null };
-
-function watchMessages() {
-  const proto = globalThis.WebSocket && globalThis.WebSocket.prototype;
-  if (!proto || proto.__spMpPatched) return;
-  const origAdd = proto.addEventListener;
-  const origRemove = proto.removeEventListener;
-  proto.addEventListener = function patchedAdd(type, fn, opts) {
-    if (type !== 'message' || typeof fn !== 'function') return origAdd.call(this, type, fn, opts);
-    const wrapped = function (ev) {
-      try { sniff(ev && ev.data); } catch { /* 嗅探失败绝不影响宿主 */ }
-      return fn.call(this, ev);
-    };
-    this.__spMpMap = this.__spMpMap || new Map();
-    this.__spMpMap.set(fn, wrapped);
-    return origAdd.call(this, type, wrapped, opts);
-  };
-  proto.removeEventListener = function patchedRemove(type, fn, opts) {
-    const mapped = this.__spMpMap && this.__spMpMap.get(fn);
-    if (mapped) this.__spMpMap.delete(fn);
-    return origRemove.call(this, type, mapped || fn, opts);
-  };
-  proto.__spMpPatched = true;
+/**
+ * Forget everything derived from the host (the resolved playerId, the per-battle tallies and the panel). Meant for
+ * tests and for a host that swaps its session in place; the panel itself keeps working without ever calling it.
+ */
+export function reset() {
+  self.playerId = null;
+  self.via = '';
+  acc.clear();
+  battleId = null;
+  fieldKey = null;
+  if (panel) { panel.remove(); panel = null; }
+  open.value = false;
 }
 
-function sniff(data) {
-  if (typeof data !== 'string' || data.length < 2 || data[0] !== '{') return;
-  let msg;
-  try { msg = JSON.parse(data); } catch { return; }
-  if (!msg || typeof msg.t !== 'string') return;
-  if ((msg.t === 'welcome' || msg.t === 'm.private') && typeof msg.playerId === 'string') self.playerId = msg.playerId;
-  if (msg.t === 'm.public' || msg.t === 'm.private') {
-    if (typeof msg.phase === 'string') self.phase = msg.phase;
-    if (Number.isInteger(msg.round)) self.round = msg.round;
+// -------------------------------------------------------------------------------------------------------------
+// 1. 自己的 playerId / 当前战斗：只读宿主已经暴露的全局入口
+// -------------------------------------------------------------------------------------------------------------
+
+const self = { playerId: null, via: '' };
+
+function host() {
+  return globalThis.__SP__ && typeof globalThis.__SP__ === 'object' ? globalThis.__SP__ : null;
+}
+
+/** 宿主自己的 net 实例上有 playerId；拿不到就问 store（`me.playerId` / `match.private.playerId`）。 */
+function resolveSelf(battle) {
+  const h = host();
+  const n = h && h.net;
+  // 宿主断线/换会话时 net.playerId 会被清空：这时忘掉缓存的身份，别拿旧 id 继续显示
+  if (n && n.playerId === null && self.playerId) { self.playerId = null; self.via = ''; }
+  if (self.playerId) return self.playerId;
+  if (n && typeof n.playerId === 'string' && n.playerId) { self.playerId = n.playerId; self.via = 'net'; return self.playerId; }
+  const st = h && h.store && typeof h.store.get === 'function' ? h.store.get() : null;
+  if (st) {
+    const fromMe = st.me && typeof st.me.playerId === 'string' ? st.me.playerId : null;
+    if (fromMe) { self.playerId = fromMe; self.via = 'store.me'; return self.playerId; }
+    const fromMatch = st.match && st.match.private && typeof st.match.private.playerId === 'string' ? st.match.private.playerId : null;
+    if (fromMatch) { self.playerId = fromMatch; self.via = 'store.match'; return self.playerId; }
+  }
+  // 兜底：谁的棋盘上有干员就是自己（只在前面都拿不到时才用，正常路径永远拿得到）
+  const r = globalThis.__SP_RUNNER__;
+  if (r && battle && typeof r.ownerOps === 'function') {
+    try {
+      const owners = (battle.spec && Array.isArray(battle.spec.players) ? battle.spec.players : [])
+        .map((p) => (p && typeof p.playerId === 'string' ? p.playerId : null)).filter(Boolean);
+      for (const pid of owners) {
+        if ((r.ownerOps(pid, battle.fieldId) || []).length) { self.playerId = pid; self.via = 'ownerOps'; return pid; }
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+/** 宿主换场/换局时清掉累计（runner 的 field 事件是最可靠的信号）。 */
+let fieldKey = null;
+function watchBattle() {
+  const r = globalThis.__SP_RUNNER__;
+  if (r && typeof r.on === 'function') {
+    try {
+      r.on('field', (f) => { const key = f && (f.fieldId || f.battleId) || null; if (key !== fieldKey) { fieldKey = key; acc.clear(); battleId = null; } });
+    } catch { /* 宿主的 on 变了也不影响：readRows 里还有 battleId 兜底 */ }
   }
 }
 
@@ -134,7 +139,7 @@ function sniff(data) {
 let panel = null;
 let button = null;
 const open = { value: false };
-/** unitId → { dmg, lastHp, lastShield, frozen } 只属于当前这一场战斗；battleId 一变就清空。 */
+/** 单位 key → { dmg, lastHp, lastShield, kills, taken, frozen }；battleId 一变就整表清空。 */
 const acc = new Map();
 let battleId = null;
 
@@ -144,8 +149,8 @@ const ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:60%;heigh
 
 function installButtonLoop() {
   const tick = () => {
-    const host = document.querySelector('.gm__corner');
-    if (host && (!button || !button.isConnected)) {
+    const corner = document.querySelector('.gm__corner');
+    if (corner && (!button || !button.isConnected)) {
       button = document.createElement('button');
       button.type = 'button';
       button.className = 'gm__gear sp-mp-dmgbtn';
@@ -154,8 +159,7 @@ function installButtonLoop() {
       button.setAttribute('aria-pressed', 'false');
       button.innerHTML = ICON;
       button.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); toggle(); });
-      const fs = host.querySelector('.gm__fs');
-      host.insertBefore(button, fs || null);
+      corner.insertBefore(button, corner.querySelector('.gm__fs') || null);
     }
     requestAnimationFrame(tick);
   };
@@ -180,18 +184,23 @@ function build() {
 
 function render() {
   if (!panel) return;
+  const battle = currentBattle();
+  const pid = resolveSelf(battle);
   const rows = readRows();
+  const dbg = globalThis.__SP_MP_DEBUG__;
+  if (typeof dbg === 'function') dbg({ battle: !!battle, pid, rows: rows.length, via: self.via });
   const total = rows.reduce((s, r) => s + r.dmg, 0);
   const kills = rows.reduce((s, r) => s + r.kills, 0);
   const taken = rows.reduce((s, r) => s + r.taken, 0);
-  const battle = currentBattle();
-  const body = !self.playerId ? `<p class="sp-mp-dmg__note">${L.noConn}</p>`
+  const mix = typeMix(rows, total);
+  const body = !pid ? `<p class="sp-mp-dmg__note">${L.noConn}</p>`
     : !battle ? `<p class="sp-mp-dmg__note">${L.ready}</p>`
       : !rows.length ? `<p class="sp-mp-dmg__note">${L.noBoard}</p>`
-        : `<div class="sp-mp-dmg__cols"><span>${L.op}</span><span></span><span>${L.damage}</span><span>${L.share}</span><span>${L.kills}</span></div>
-           <ol class="sp-mp-dmg__list">${rows.map(rowHtml).join('')}</ol>`;
+        : `<div class="sp-mp-dmg__cols"><span>${L.op}</span><span></span><span>${L.damage}</span><span>${L.share}</span><span>${L.type}</span></div>
+           <ol class="sp-mp-dmg__list">${rows.map(rowHtml).join('')}</ol>
+           ${mix.length ? `<div class="sp-mp-dmg__mix"><b>${L.byType}</b>${mix.map((m) => `<span class="sp-mp-dmg__tag ${TYPE_CLASS[m.type] || ''}">${m.name} ${pct(m.share)}</span>`).join('')}</div>` : ''}`;
   panel.innerHTML = `<header class="sp-mp-dmg__head"><h3 class="sp-mp-dmg__title">${L.title}</h3>
-      <span style="font-size:11px;color:var(--text-lo,#8ba39a)">${battle ? String(battle.kind || '') : ''}</span>
+      <span class="sp-mp-dmg__phase">${battle ? String(battle.kind || '') : ''}</span>
       <button type="button" class="sp-mp-dmg__close" aria-label="关闭" title="关闭">✕</button></header>
     <div class="sp-mp-dmg__sum">
       <span><i>${L.total}</i><b>${fmt(total)}</b></span>
@@ -199,7 +208,7 @@ function render() {
       <span><i>${L.taken}</i><b>${fmt(taken)}</b></span>
       <span><i>${L.heal}</i><b>—</b></span>
     </div>${body}
-    <p class="sp-mp-dmg__note" style="padding:4px 9px 8px;font-size:11px;opacity:.7">${L.note}</p>`;
+    <p class="sp-mp-dmg__note sp-mp-dmg__foot">${L.note}</p>`;
   const close = panel.querySelector('.sp-mp-dmg__close');
   if (close) close.addEventListener('click', () => toggle());
 }
@@ -208,15 +217,71 @@ function rowHtml(r) {
   const cls = `sp-mp-dmg__row${r.alive ? '' : ' is-down'}${r.dmg > 0 ? '' : ' is-idle'}`;
   const icon = opIcon(r.defId);
   const thumb = icon ? `<img class="sp-mp-dmg__thumb" src="${icon}" alt="" loading="lazy">` : `<span class="sp-mp-dmg__thumb"></span>`;
+  const tag = r.typeName ? `<span class="sp-mp-dmg__tag ${TYPE_CLASS[r.type] || ''}" title="${r.typeTitle || ''}">${r.typeName}${r.element ? '·' + r.element : ''}</span>` : '<span></span>';
   return `<li class="${cls}" title="${r.defId} · 承伤 ${fmt(r.taken)}">
     ${thumb}<span class="sp-mp-dmg__name">${opName(r.defId)}</span>
     <span class="sp-mp-dmg__v">${fmt(r.dmg)}</span>
     <span class="sp-mp-dmg__share"><i style="width:${(r.share * 100).toFixed(1)}%"></i><b>${pct(r.share)}</b></span>
-    <span class="sp-mp-dmg__k">${r.kills}</span></li>`;
+    ${tag}</li>`;
+}
+
+/** 类型构成：按主攻击类型把总伤害拆开（类型来自干员记录，不是逐次实测）。 */
+function typeMix(rows, total) {
+  if (!(total > 0)) return [];
+  const by = new Map();
+  for (const r of rows) {
+    if (!(r.dmg > 0)) continue;
+    const key = r.type || 'other';
+    by.set(key, (by.get(key) || 0) + r.dmg);
+  }
+  return [...by.entries()]
+    .map(([type, v]) => ({ type, name: TYPE_NAME[type] || type, share: v / total }))
+    .sort((a, b) => b.share - a.share);
 }
 
 // -------------------------------------------------------------------------------------------------------------
-// 3. 通过宿主的公开查询取数（全部只读）
+// 3. 干员记录：名字 / 头像 / 伤害类型（全部只读 data.js）
+// -------------------------------------------------------------------------------------------------------------
+
+function hostData() {
+  const h = host();
+  return (h && h.data) || globalThis.__SP_DATA__ || null;
+}
+function lookup(kind, id) {
+  const store = hostData();
+  return store && typeof store.lookup === 'function' ? store.lookup(kind, id) : null;
+}
+function opName(defId) {
+  const rec = lookup('chess', defId);
+  return (rec && rec.name) || defId || '?';
+}
+function opIcon(defId) {
+  try {
+    const store = hostData();
+    const assets = store && typeof store.get === 'function' ? store.get('assets') : null;
+    if (!assets) return null;
+    if (typeof store.avatarUrl === 'function') return store.avatarUrl(assets, defId) || null;
+    if (assets.avatars && typeof assets.avatars === 'object') return assets.avatars[defId] || null;
+  } catch { /* ignore */ }
+  return null;
+}
+
+/** { type, typeName, element, typeTitle } of an operator record: its main attack type + any elemental keyword. */
+function typeOf(defId) {
+  const rec = lookup('chess', defId);
+  if (!rec) return { type: null, typeName: null, element: null, typeTitle: '' };
+  const type = TYPE_NAME[rec.dmgType] ? rec.dmgType : null;
+  const texts = [rec.trait || '', ...(Array.isArray(rec.skills) ? rec.skills.map((s) => (s && s.desc) || '') : []),
+    ...(Array.isArray(rec.talents) ? rec.talents.map((t) => (t && (t.desc || t.name)) || '') : [])].join(' ');
+  const element = ELEMENT_WORDS.find((w) => texts.includes(w)) || null;
+  const bits = [];
+  if (type) bits.push(`主攻击类型：${TYPE_NAME[type]}（记录 dmgType=${rec.dmgType}）`);
+  if (element) bits.push(`技能/天赋涉及${element}元素伤害`);
+  return { type, typeName: type ? TYPE_NAME[type] : null, element, typeTitle: bits.join('；') };
+}
+
+// -------------------------------------------------------------------------------------------------------------
+// 4. 伤害累计（HP 增量）
 // -------------------------------------------------------------------------------------------------------------
 
 function currentBattle() {
@@ -228,21 +293,21 @@ function currentBattle() {
 function readRows() {
   const r = globalThis.__SP_RUNNER__;
   const battle = currentBattle();
-  if (!r || !battle || !self.playerId) return [];
+  if (!r || !battle) return [];
+  const pid = resolveSelf(battle);
+  if (!pid) return [];
   if (typeof r.ownerOps !== 'function' || typeof r.unitStats !== 'function') return [];
-  // 换了一场战斗（或重开）：清空本场累计
   if (battleId !== battle.battleId) { battleId = battle.battleId; acc.clear(); }
   let ops = [];
-  try { ops = r.ownerOps(self.playerId, battle.fieldId) || []; } catch { return []; }
+  try { ops = r.ownerOps(pid, battle.fieldId) || []; } catch { return []; }
   const rows = [];
   for (const op of ops) {
     if (!op || typeof op.defId !== 'string') continue;
     const pieceUid = Number.isInteger(op.uid) ? op.uid : null;
     let unitId = null;
-    try { unitId = pieceUid != null && typeof r.unitIdOf === 'function' ? r.unitIdOf(pieceUid, self.playerId, battle.fieldId) : null; } catch { unitId = null; }
+    try { unitId = pieceUid != null && typeof r.unitIdOf === 'function' ? r.unitIdOf(pieceUid, pid, battle.fieldId) : null; } catch { unitId = null; }
     let e = null;
     if (unitId != null) { try { e = r.unitStats(unitId, battle.fieldId); } catch { e = null; } }
-    // 没部署：算 0 伤害，但仍列出来（玩家能看出谁还没上场）
     const key = unitId != null ? `u${unitId}` : `p${pieceUid}`;
     let st = acc.get(key);
     if (!st) { st = { dmg: 0, lastHp: null, lastShield: null, kills: 0, taken: 0, frozen: false }; acc.set(key, st); }
@@ -256,11 +321,12 @@ function readRows() {
       }
       st.lastHp = hp;
       st.lastShield = sh;
-      if (e.alive === false) st.frozen = true;                    // 阵亡：停止累加（宿主不再更新它的数值）
+      if (e.alive === false) st.frozen = true;
       if (Number.isFinite(e.kills)) st.kills = e.kills;
       if (Number.isFinite(e.taken)) st.taken = e.taken;
     }
-    rows.push({ key, defId: op.defId, alive: e ? e.alive !== false : false, dmg: st.dmg, kills: st.kills, taken: st.taken, heal: null });
+    const t = typeOf(op.defId);
+    rows.push({ key, defId: op.defId, alive: e ? e.alive !== false : false, dmg: st.dmg, kills: st.kills, taken: st.taken, ...t });
   }
   const total = rows.reduce((s, x) => s + x.dmg, 0);
   for (const x of rows) x.share = total > 0 ? Math.min(1, x.dmg / total) : 0;
@@ -269,7 +335,7 @@ function readRows() {
 }
 
 // -------------------------------------------------------------------------------------------------------------
-// 4. 样式：插件自己的 CSS 文件（index.html 里 <link> 引入；缺失时这里兜底挂一份）
+// 5. 样式：插件自己的 CSS（index.html 里 <link> 引入；缺失时兜底挂一份）
 // -------------------------------------------------------------------------------------------------------------
 
 function installStyle() {

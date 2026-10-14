@@ -1,7 +1,7 @@
 {
   "name": "sp-mp",
   "displayName": "多人容量叠加层 · Multiplayer capacity overlay",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Co-op rooms of 4 / 8 / 12 seats, a 联防 helper order that prefers humans, and a self-contained client-side 伤害统计 damage panel for Stronghold-Protocol - loaded as an overlay (the install stays pristine, official update packages keep working).",
   "base": "0.2.6",
   "supports": [
@@ -29,5 +29,11 @@
     "damagePanel": true,
     "clientPlugin": "sp-mp/client/entry.js"
   },
-  "clientFiles": 3
+  "clientFiles": 3,
+  "docs": {
+    "development": "DEVELOPMENT.md",
+    "devlog": "docs/DEVLOG.md",
+    "readme": "README.md"
+  },
+  "verify": "node sp-mp/tools/test-client.mjs"
 }

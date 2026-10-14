@@ -2,6 +2,12 @@
 
 给《卫戍协议：盟约》0.2.4 加**4 / 8 / 12 人同盟房间**，但**一个安装文件都不改**——所以官方更新包照常可用，`npm run doctor` 永远显示安装干净。
 
+## 给开发者 / 其他 agent
+
+改这个插件之前请先读 **[DEVELOPMENT.md](DEVELOPMENT.md)**（结构、宿主接口契约、铁律、验证清单、已知坑），
+以及 **[docs/DEVLOG.md](docs/DEVLOG.md)**（做过什么、为什么、还欠什么）。
+客户端逻辑的回归测试：`node sp-mp/tools/test-client.mjs`。
+
 ## 为什么这样做
 
 游戏的官方更新包（`Stronghold-Protocol-v0.2.x-update.zip`）在启动时会用新版 `MANIFEST.json` 逐文件校验安装：**任何被改过的程序文件都会让服务器拒绝启动**。所以"直接改安装"和"主线正常更新"是互斥的。
