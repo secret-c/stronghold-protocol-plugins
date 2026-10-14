@@ -1,0 +1,29 @@
+{
+  "name": "sp-mp",
+  "displayName": "多人容量叠加层 · Multiplayer capacity overlay",
+  "version": "1.0.0",
+  "description": "Co-op rooms of 4 / 8 / 12 seats for Stronghold-Protocol, loaded as an overlay so the install stays pristine and official update packages keep working.",
+  "base": "0.2.6",
+  "supports": [
+    "0.2.6"
+  ],
+  "files": 29,
+  "publicFiles": 16,
+  "entry": "start.mjs",
+  "hooks": "hooks.mjs",
+  "rebase": "tools/rebase.mjs",
+  "feature": {
+    "roomCapacities": [
+      4,
+      8,
+      12
+    ],
+    "defaultSeats": 4,
+    "maxSeats": 12,
+    "scaleLadder": {
+      "1-4": 1,
+      "5-8": 2,
+      "9-12": 3
+    }
+  }
+}
