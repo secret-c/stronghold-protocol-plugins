@@ -32,25 +32,25 @@ node sp-mp\start.mjs --no-open       :: 不自动开浏览器
 ```
 
 ```bat
-:: 做法 B（让"普通启动"也变多人）：把叠加层的 29 个文件复制进安装
+:: 做法 B（让"普通启动"也变多人）：把叠加层的 32 个文件复制进安装
 sp-mp\tools\install-patch.cmd        :: 菜单：1 打进安装 / 2 还原 / 3 查看状态
 ```
 
-做法 B 的代价：安装不再与 `MANIFEST.json` 一致（`npm run doctor` 会报那 29 个文件），**官方更新包必须先还原（`revert`）才能启动** —— 这正是做法 A 想避免的事。备份在 `sp-mp/install-backup/`。
+做法 B 的代价：安装不再与 `MANIFEST.json` 一致（`npm run doctor` 会报那 32 个文件），**官方更新包必须先还原（`revert`）才能启动** —— 这正是做法 A 想避免的事。备份在 `sp-mp/install-backup/`。
 
-启动日志会先打印一行 `[sp-mp] … 29 overlay files …`，随后是官方那套横幅（版本号 + 局域网地址）。
+启动日志会先打印一行 `[sp-mp] … 32 overlay files …`，随后是官方那套横幅（版本号 + 局域网地址）。
 
 ## 仓库里有什么 / 没有什么
 
 | | 内容 |
 | --- | --- |
-| ✅ 收录 | [`sp-mp/`](sp-mp/)：`files/`（叠加层本体，29 个运行时文件）、`base/`（这 29 个文件在基线版本里的原始副本，rebase 用）、`hooks.mjs`、`start*.mjs`、`plugin.json`、`tools/`（assemble / build-tree / rebase / install-patch） |
+| ✅ 收录 | [`sp-mp/`](sp-mp/)：`files/`（叠加层本体，32 个运行时文件）、`base/`（这 29 个文件在基线版本里的原始副本，rebase 用）、`hooks.mjs`、`start*.mjs`、`plugin.json`、`tools/`（assemble / build-tree / rebase / install-patch） |
 | ❌ 不收录 | 官方源码与美术素材（版权归上海鹰角网络 / Yostar，且本插件一个都不需要）；`public/`、`shared/` 这两个**联合目录**是本地生成的（见下）；`install-backup/`、`*.pre-rebase` 等本机状态 |
 | 📄 许可 | 插件代码与上游一致：**GPL-3.0-or-later**；不含任何官方素材 |
 
 ## 插件是怎么做到「不改安装」的
 
-- **服务端 13 个文件**（`files/server/**`、`files/shared/**`）：`hooks.mjs` 是一个 Node **模块解析钩子**，服务器加载 `server/…` 或 `shared/…` 时被重定向到叠加层里的同名文件。
+- **服务端 14 个文件**（`files/server/**`、`files/shared/**`）：`hooks.mjs` 是一个 Node **模块解析钩子**，服务器加载 `server/…` 或 `shared/…` 时被重定向到叠加层里的同名文件。
 - **客户端 16 个文件**（`files/public/**`）：把服务器的 `publicDir` / `sharedDir` 指向 `public/`、`shared/` 两个**联合目录** —— 未修改的文件从安装复制（大目录如 `assets/` 用 junction 指过去），被修改的用叠加层版本。这两个目录由 `tools/build-tree.mjs` 生成，**不在本仓库里**。
 - **版本守卫**：安装版本不在 `plugin.json.supports` 里时 `start.mjs` 拒绝启动并提示先 rebase；确有需要可 `SP_MP_FORCE=1` 强行启动。
 
@@ -78,6 +78,6 @@ node sp-mp/tools/build-tree.mjs   # 重建客户端联合目录
 
 ## 边界与限制
 
-- 叠加层**绑定上游释放版本**：官方改动它覆盖的 29 个文件中的任何一个，都需要跑一次 `rebase.mjs`。
+- 叠加层**绑定上游释放版本**：官方改动它覆盖的 32 个文件中的任何一个，都需要跑一次 `rebase.mjs`。
 - 它是**本地扩展**，不是官方玩法：官方房间是 1–4 人。把它当同人插件用，不要当成官方支持。
 - 无广告、无付费、无任何形式的盈利（与上游一致）。

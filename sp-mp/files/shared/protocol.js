@@ -339,10 +339,11 @@ const statView = (x) => ({
  * target-selection grid (the sim's `unit.liveRangeGrid`, Battle._refreshRange; community report E1 after 0.1.0: 烛煌
  * S3's 4-11 never reached the card). `dir`: the unit's facing now (UP / RIGHT / DOWN / LEFT; UnitInfo.dir is the facing
  * at send time and the snapshot tuples carry none) — the detail card's range overlay rotates by it (GitHub PR #281).
- * @param {{ id?: number, uid?: number|null, defId?: string, hp?: number, alive?: boolean, base?: any, liveRangeGrid?: any, dir?: string } | null} u
+ * @param {{ id?: number, uid?: number|null, defId?: string, hp?: number, alive?: boolean, base?: any, liveRangeGrid?: any, dir?: string, stats?: any } | null} u
  * @param {any} [s] aggregated stats (missing ⇒ the base)
  * @returns {{ id: number|null, uid: number|null, defId: string|null, hp: number, alive: boolean, maxHp: number, atk: number,
- *   def: number, res: number, interval: number|null, blockCnt: number, moveSpeed: number,
+ *   def: number, res: number, interval: number|null, blockCnt: number, moveSpeed: number, dmg: number, kills: number,
+ *   heal: number, taken: number,
  *   base: { maxHp: number, atk: number, def: number, res: number, interval: number|null, blockCnt: number, moveSpeed: number },
  *   range?: Array<[number, number]>, dir?: string }}
  */
@@ -353,6 +354,10 @@ export function unitStatsEntry(u, s = null) {
   const range = u?.side !== 'enemy' && Array.isArray(u?.liveRangeGrid)
     ? u.liveRangeGrid.filter((p) => Array.isArray(p) && Number.isInteger(p[0]) && Number.isInteger(p[1])).map((p) => [p[0], p[1]])
     : null;
+  // combat tally (sim/units.js `stats`): the 伤害统计 panel ranks by it. Counts HP removed from the other side only
+  // (sim/damage.js), the same reading as the battle result's unitStats and the player's damageDealt.
+  const st = u && u.stats && typeof u.stats === 'object' ? u.stats : null;
+  const n = (v) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
   return {
     id: Number.isInteger(u?.id) ? u.id : null,
     uid: Number.isInteger(u?.uid) ? u.uid : null,
@@ -361,6 +366,10 @@ export function unitStatsEntry(u, s = null) {
     alive: u?.alive !== false,
     ...statView(cur),
     base: statView(base),
+    dmg: n(st?.dmg),
+    kills: n(st?.kills),
+    heal: n(st?.heal),
+    taken: n(st?.taken),
     ...(range ? { range } : {}),
     ...(isDir(u?.dir) ? { dir: u.dir } : {}),
     // the enemy card greys a SILENCE-format line (折射) from this; absent flags ⇒ not silenced

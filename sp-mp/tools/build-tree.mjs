@@ -39,14 +39,15 @@ function union(fromDir, toDir, rel = '') {
     const from = path.join(fromDir, e.name);
     const to = path.join(toDir, e.name);
     const relPath = rel ? `${rel}/${e.name}` : e.name;
-    const overridden = fs.existsSync(path.join(OVERLAY, ...relPath.split('/')));
     if (e.isDirectory()) {
-      if (!overridden && JUNCTION.has(relPath.split('/')[0]) && relPath.split('/').length === 1) { link(from, to); links++; continue; }
+      const carried = fs.existsSync(path.join(OVERLAY, ...relPath.split('/')));   // the overlay carries files below here
+      if (!carried && JUNCTION.has(relPath.split('/')[0]) && relPath.split('/').length === 1) { link(from, to); links++; continue; }
       const sub = union(from, to, relPath);
       files += sub.files; links += sub.links;
       continue;
     }
-    if (overridden) continue; // the overlay's copy is written in the second pass
+    // a file the overlay does NOT carry is copied as it is; one it does was written by the overlay pass below
+    if (fs.existsSync(path.join(OVERLAY, ...relPath.split('/')))) continue;
     fs.copyFileSync(from, to);
     files++;
   }
