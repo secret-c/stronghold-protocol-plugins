@@ -71,7 +71,9 @@ node sp-mp\tools\install-patch.mjs apply|revert|status
 - 数据完全来自**本机运行的这一场战斗**（每个浏览器模拟自己的战场），不占服务器流量、不加协议字段；
 - 只统计**你自己的干员**（队友的战场在他们自己的浏览器里跑）；战斗暂停或尚未开打时显示一行提示，而不是冻结的数字；
 - 打开时每 250 ms 刷新一次，与详情卡读取实时数值的频率一致；
-- 叠加层通过 `files/public/js/ui/damagePanel.js`（安装目录里没有的新模块，由联合目录提供）与 `files/public/js/screens/game.js`、`files/public/css/screens/game.css`、`files/public/js/battle/runner.js` 交付。
+- **完全由插件自持**：面板本体在 `sp-mp/client/`（`client.js` + `client.css` + `entry.js`），由叠加层自己的 `index.html` 通过 `<script type="module" src="/sp-mp/client/entry.js">` 引导；服务器把它当普通静态文件从 `/sp-mp/client/…` 提供。
+- 它只用宿主**已经公开**的只读入口：`window.__SP_RUNNER__` 的 `currentBattle()` / `ownerOps()` / `unitIdOf()` / `unitStats()`，加上只读地嗅探服务器推给本客户端的 `m.private`（取 `playerId`）。**不改宿主一个文件、不改协议、不回包**。
+- 伤害按干员生命值的减少量累计（护盾吸收不计入）——依据是宿主自己的定义：伤害只统计从对方身上移除的生命值。单位阵亡或本场结束即停止累加。
 
 ## 官方更新之后（重要）
 

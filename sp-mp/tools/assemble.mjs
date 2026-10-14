@@ -95,6 +95,10 @@ function walkWork() {
   return out;
 }
 
+/**
+ * The plugin's own client modules live in `sp-mp/client/` and are ROUTED into the union tree (see the block above).
+ */
+
 const overrides = [];
 const seen = new Set();
 const consider = (rel) => {
@@ -111,9 +115,60 @@ for (const rel of walkInstall()) consider(rel);
 for (const rel of walkWork()) consider(rel);   // a module the development tree adds has no install counterpart
 for (const rel of RUNTIME) consider(rel);      // fallback: a path the walks could not see
 
+// The plugin's own client modules (`sp-mp/client/**`) are served to the browser at `/sp-mp/client/…`: the static
+// server only serves the install and the union trees, so they are ROUTED into the union tree as `public/sp-mp/client/…`
+// (copied below, then exposed by tools/build-tree.mjs like any other public file). Overriding a release file is a
+// different job from adding one, so they are not mixed into the override list above.
+const CLIENT_SRC = path.join(MP, 'client');
+const CLIENT_OUT = path.join(MP, 'public', 'sp-mp', 'client');
+let clientRouted = 0;
+if (fs.existsSync(CLIENT_SRC)) {
+  fs.rmSync(CLIENT_OUT, { recursive: true, force: true });
+  for (const e of fs.readdirSync(CLIENT_SRC, { withFileTypes: true })) {
+    if (e.isDirectory()) continue;
+    put(path.join(CLIENT_SRC, e.name), path.join(CLIENT_OUT, e.name));
+    clientRouted++;
+  }
+}
+
+// The overlay's own index.html: the install's page + two lines that boot the plugin's client module (a stylesheet and
+// a module script). Derived from the INSTALL at build time, so an upstream change to index.html is never lost and its
+// copy in `files/` can never drift. `rebase.mjs` will report it merged after the next official update — that is
+// expected: the injector below re-applies the same two lines.
+const INSTALL_INDEX = path.join(ROOT, 'public', 'index.html');
+const OVERLAY_INDEX = path.join(MP, 'files', 'public', 'index.html');
+let indexInjected = false;
+if (fs.existsSync(INSTALL_INDEX)) {
+  indexInjected = injectClient(INSTALL_INDEX, OVERLAY_INDEX);
+}
+
+/** @returns {boolean} whether the file existed and the tags are in place */
+function injectClient(from, to) {
+  let html = fs.readFileSync(from, 'utf8');
+  if (!html.includes('/sp-mp/client/entry.js')) {
+    const tags = '  <!-- sp-mp overlay: 伤害统计 panel, loaded from the plugin (no host file is modified) -->\n'
+      + '  <link rel="stylesheet" href="/sp-mp/client/client.css" />\n'
+      + '  <script type="module" src="/sp-mp/client/entry.js"></script>\n';
+    if (html.includes('<script type="module" src="/js/main.js"')) {
+      html = html.replace(/(\s*)<script type="module" src="\/js\/main\.js"/, `\n${tags}$1<script type="module" src="/js/main.js"`);
+    } else if (html.includes('</head>')) {                       // an upstream rewrite without that literal tag
+      html = html.replace('</head>', `${tags}</head>`);
+    } else {
+      console.log('! index.html: no injection point found (neither the main.js module script nor </head>)');
+      return false;
+    }
+  }
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.writeFileSync(to, html, 'utf8');
+  // the pristine copy for rebase: the install's page as it is (no plugin tags) — this is the base side of a merge
+  put(from, path.join(MP, 'base', 'public', 'index.html'));
+  return true;
+}
+
 let copied = 0;
 const missing = [];
 for (const rel of overrides) {
+  if (rel === 'public/index.html') continue;   // written by injectClient above
   const src = path.join(WORK, ...rel.split('/'));
   if (!fs.existsSync(src)) { missing.push(rel); continue; }
   put(src, path.join(MP, 'files', ...rel.split('/')));
@@ -123,11 +178,13 @@ for (const rel of overrides) {
   if (fs.existsSync(pristine)) put(pristine, path.join(MP, 'base', ...rel.split('/')));
   copied++;
 }
+if (indexInjected) copied++;
 
 // stale overlay files: a path that no longer differs (or was deleted in the development tree) must leave `files/`
 // and `base/`, or the server would keep serving it through the hooks
 let dropped = 0;
 const keep = new Set(overrides);
+keep.add('public/index.html');
 for (const sub of ['files', 'base']) {
   const dir = path.join(MP, sub);
   if (!fs.existsSync(dir)) continue;
@@ -151,7 +208,8 @@ if (LIST_ONLY) {
   console.log(`overrides (${overrides.length}) — install v${release ?? '?'}:`);
   for (const rel of overrides) console.log('  ' + rel);
 } else {
-  console.log(`overlay files: ${copied} (install: v${release ?? '?'}), stale removed: ${dropped}`);
+  console.log(`overlay files: ${copied} (install: v${release ?? '?'}), client routed: ${clientRouted}, index.html: ${indexInjected ? 'injected' : 'NOT injected'}, stale removed: ${dropped}`);
   for (const rel of overrides) console.log('  + ' + rel);
+  if (indexInjected) console.log('  + public/index.html (install copy + /sp-mp/client tags)');
   if (missing.length) { console.log('MISSING:'); for (const m of missing) console.log('  ' + m); }
 }

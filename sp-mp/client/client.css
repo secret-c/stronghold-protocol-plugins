@@ -1,0 +1,64 @@
+/* sp-mp/client/client.css — 伤害统计面板的样式（全部走 sp-mp- 前缀，避免和宿主样式打架）。
+   颜色沿用宿主的 CSS 变量，变量缺失时用兜底值，因此宿主换主题不会让面板失色。 */
+
+.sp-mp-dmgbtn svg { width: 60%; height: 60%; fill: currentColor; }
+
+.sp-mp-dmg {
+  position: fixed;
+  left: 12px;
+  bottom: 56px;
+  width: 330px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 40;
+  font-size: 13px;
+  color: var(--text-hi, #e8f3ef);
+  background: rgba(8, 11, 10, .94);
+  border: 1px solid var(--line-2, #2c3a35);
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(3px);
+}
+.sp-mp-dmg__head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line-1, #22302b);
+}
+.sp-mp-dmg__title { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .06em; }
+.sp-mp-dmg__close {
+  margin-left: auto; width: 20px; height: 20px; display: grid; place-items: center;
+  background: none; border: 0; color: var(--text-lo, #8ba39a); cursor: pointer; font-size: 14px; line-height: 1;
+}
+.sp-mp-dmg__close:hover { color: var(--mint-400, #4ed8af); }
+
+.sp-mp-dmg__sum {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+  padding: 7px 9px; border-bottom: 1px solid var(--line-1, #22302b);
+}
+.sp-mp-dmg__sum span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sp-mp-dmg__sum i { font-style: normal; font-size: 11px; color: var(--text-lo, #8ba39a); }
+.sp-mp-dmg__sum b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.sp-mp-dmg__sum span:first-child b { color: var(--orange-400, #ffb45a); }
+
+.sp-mp-dmg__cols,
+.sp-mp-dmg__row {
+  display: grid; grid-template-columns: 26px 1fr 62px 84px 26px; align-items: center; gap: 5px;
+}
+.sp-mp-dmg__cols { padding: 4px 9px; font-size: 11px; color: var(--text-lo, #8ba39a); }
+.sp-mp-dmg__cols span:nth-child(n+3) { text-align: right; }
+.sp-mp-dmg__list { margin: 0; padding: 0 0 5px; list-style: none; overflow-y: auto; }
+.sp-mp-dmg__row { padding: 3px 9px; border-top: 1px solid rgba(255, 255, 255, .04); }
+.sp-mp-dmg__thumb { width: 26px; height: 26px; object-fit: cover; background: #101614; }
+.sp-mp-dmg__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-mp-dmg__v, .sp-mp-dmg__k { text-align: right; font-variant-numeric: tabular-nums; }
+.sp-mp-dmg__k { color: var(--text-md, #b7c9c2); }
+.sp-mp-dmg__share { position: relative; display: flex; align-items: center; justify-content: flex-end; height: 14px; }
+.sp-mp-dmg__share i {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 8px;
+  background: linear-gradient(90deg, rgba(78, 216, 175, .25), rgba(78, 216, 175, .6));
+}
+.sp-mp-dmg__share b { position: relative; font-size: 11px; color: var(--text-md, #b7c9c2); font-variant-numeric: tabular-nums; }
+.sp-mp-dmg__row.is-down .sp-mp-dmg__name, .sp-mp-dmg__row.is-down .sp-mp-dmg__v { color: var(--text-lo, #8ba39a); text-decoration: line-through; }
+.sp-mp-dmg__row.is-idle .sp-mp-dmg__v { color: var(--text-lo, #8ba39a); }
+.sp-mp-dmg__note { margin: 0; padding: 12px 9px; color: var(--text-lo, #8ba39a); line-height: 1.5; }
