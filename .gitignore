@@ -1,0 +1,17 @@
+# 生成的客户端联合目录（tools/build-tree.mjs）：未修改的文件从安装目录复制、大目录用 junction，
+# 修改过的用叠加层版本 —— 两者都不该进仓库
+sp-mp/public/
+sp-mp/shared/
+
+# 本机状态
+sp-mp/install-backup/
+sp-mp/.rebase/
+sp-mp/files/**/*.pre-rebase
+sp-mp/base/**/*.pre-rebase
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.log

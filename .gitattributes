@@ -1,0 +1,7 @@
+# 仓库里一律存 LF；Windows 检出的批处理要 CRLF（cmd.exe 解析要求），其余保持 LF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.mjs text eol=lf
+*.js  text eol=lf
+*.json text eol=lf
+*.md  text eol=lf
