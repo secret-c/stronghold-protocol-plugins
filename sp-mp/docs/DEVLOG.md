@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-10-14 · 1.3.0：实际伤害账本与四色单条界面
+
+修复两处根因：ownerOps实际不返回uid，旧面板无法找到单位而恒为0；HP差分统计的是自身承伤，且开面板才采样，无法反推输出。现在在引擎applyHpLoss用实际dealt记录WeakMap四类账本；runner.combatStats按本人干员及所属召唤物归组，界面一人一条、最高伤害归一、四类分段、旁总计、悬停分类。元素积累不等于元素HP伤害；生命流失沿引擎true。账本不改战斗结果或事件，无网络新增字段。
+
+交付：31个override+3个client文件；build-tree新增sim联合目录，start→startServer显式传simDir；installer复制新增client文件并可revert。最终assemble/build后真实HTTP字节对照通过，未修改真实安装。源码与联合目录最后的tooltip/focus差异已清零。
+
+验证：真实引擎2/2、runner10/10、UI回归通过；真实HTTP与临时安装apply/revert通过；Chrome引擎→runner→界面3500总计、3人四类堆叠与hover通过，截图screenshots/damage-panel-overview.png和damage-panel.png。golden全部287场match；lint0errors（135原有warnings）、typecheck、docs32/32、ESM加载、server smoke通过；rebase dry-run 31文件upstream未变。
+
+完整CI：6349测试，6319通过、7失败、23跳过。2个大厅计时失败隔离重跑2/2通过；4个容量失败来自原基线protocol缺room.setCapacity/RESULT_LIMITS.sources（从未修改的HEAD导出复现关键2例）；剩余asset-index符号链接EPERM同样在HEAD导出复现，是本机权限限制。导入检查exit0但既有nodeData三条诊断在HEAD也一致。未扩展修复无关问题。doctor仅既有node_modules/.package-lock.json与MANIFEST不符。
+
 ## 2026-10-14 · 伤害统计面板：从“改宿主”改成“插件自持”，并修掉类型与取数问题
 
 **背景。** 面板最初是改宿主的 `shared/protocol.js` / `public/js/battle/runner.js` / `public/js/screens/game.js` / `public/css/screens/game.css` 实现的。

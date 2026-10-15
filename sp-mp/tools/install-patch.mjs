@@ -1,8 +1,8 @@
-// sp-mp/tools/install-patch.mjs — the OTHER way to use the overlay: copy its 28 files INTO the install, so the normal
+// sp-mp/tools/install-patch.mjs — the OTHER way to use the overlay: copy its 31 overrides plus client files INTO the install, so the normal
 // launcher (scripts\start-windows.bat, npm start) starts the multiplayer build.
 //
 //   node sp-mp/tools/install-patch.mjs status   # is the install patched?
-//   node sp-mp/tools/install-patch.mjs apply    # back up the 28 files, then copy the overlay over them
+//   node sp-mp/tools/install-patch.mjs apply    # back up the overlay files, then copy the overlay over them
 //   node sp-mp/tools/install-patch.mjs revert   # put the backed-up originals back
 //
 // Trade-off (this is what the overlay exists to avoid): a patched install no longer matches MANIFEST.json, and an
@@ -29,7 +29,11 @@ const walk = (dir, rel = '', out = []) => {
   }
   return out;
 };
-const overlay = walk(FILES);
+// The injected entry URL is a new public file, not an upstream override. Include the self-contained client too.
+const clientFiles = walk(path.join(MP, 'client')).map((rel) => `public/sp-mp/client/${rel}`);
+const overlay = [...new Set([...walk(FILES), ...clientFiles])];
+const source = (rel) => rel.startsWith('public/sp-mp/client/')
+  ? path.join(MP, 'client', rel.slice('public/sp-mp/client/'.length)) : path.join(FILES, ...rel.split('/'));
 const target = (rel) => path.join(ROOT, ...rel.split('/'));
 const backupPath = (rel) => path.join(BACKUP, ...rel.split('/'));
 
@@ -42,7 +46,7 @@ function status() {
   let other = 0;
   for (const { rel, sha256 } of state.files) {
     const p = target(rel);
-    if (fs.existsSync(p) && sha(p) === sha256) other++;
+    if (fs.existsSync(p) ? sha(p) !== sha256 : sha256 !== null) other++;
     else same++;
   }
   console.log(`install: patched on ${state.at} (backup of ${state.files.length} files in sp-mp/install-backup/)`);
@@ -55,9 +59,14 @@ function apply() {
   fs.mkdirSync(BACKUP, { recursive: true });
   const files = [];
   for (const rel of overlay) {
-    const from = path.join(FILES, ...rel.split('/'));
+    const from = source(rel);
     const to = target(rel);
-    if (!fs.existsSync(to)) { console.log(`! missing in the install: ${rel} (skipped)`); continue; }
+    if (!fs.existsSync(to)) {
+      files.push({ rel, existed: false, sha256: null });
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+      continue;
+    }
     const bak = backupPath(rel);
     fs.mkdirSync(path.dirname(bak), { recursive: true });
     fs.copyFileSync(to, bak);
@@ -78,9 +87,15 @@ function revert() {
   if (!state) { console.log('nothing to revert (the install was not patched by this tool).'); return; }
   let restored = 0;
   const problems = [];
-  for (const { rel, sha256 } of state.files) {
+  for (const { rel, sha256, existed } of state.files) {
     const bak = backupPath(rel);
     const to = target(rel);
+    if (existed === false) {
+      const resolved = path.resolve(to);
+      if (!resolved.startsWith(path.resolve(ROOT) + path.sep)) { problems.push(`${rel}: invalid target`); continue; }
+      if (fs.existsSync(resolved)) { fs.unlinkSync(resolved); restored++; }
+      continue;
+    }
     if (!fs.existsSync(bak)) { problems.push(`${rel}: backup missing`); continue; }
     if (sha(bak) !== sha256) { problems.push(`${rel}: backup does not match its recorded hash`); continue; }
     if (fs.existsSync(to) && sha(to) === sha256) continue; // already original

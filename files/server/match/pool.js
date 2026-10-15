@@ -58,7 +58,7 @@ export class SharedPool {
    * @param {import('./gamedata.js').GameData} gd
    * @param {{ banned?: Iterable<string> }} [opts]
    */
-  constructor(gd, { banned = [] } = {}) {
+  constructor(gd, { banned = [], onChange = null } = {}) {
     this.gd = gd;
     const ban = new Set(banned);
     /** @type {Map<string, { cap: number, left: number, tier: number }>} */
@@ -70,6 +70,7 @@ export class SharedPool {
       this.entries.set(id, { cap, left: cap, tier: gd.tierOf(id) });
     }
     this.banned = [...ban].sort();
+    this.onChange = typeof onChange === 'function' ? onChange : null;
   }
 
   /** Whether a base chess is part of this match's pool (visible, not banned). */
@@ -83,6 +84,7 @@ export class SharedPool {
     if (!e || !(n > 0)) return 0;
     const k = overdraw ? Math.floor(n) : Math.min(Math.max(0, e.left), Math.floor(n));
     e.left -= k;
+    if (k > 0) this.onChange?.();
     return k;
   }
 
@@ -92,6 +94,7 @@ export class SharedPool {
     if (!e || !(n > 0)) return 0;
     const k = Math.min(e.cap - e.left, Math.floor(n));
     e.left += k;
+    if (k > 0) this.onChange?.();
     return k;
   }
 
@@ -128,6 +131,40 @@ export class SharedPool {
     let r = rng() * total;
     for (const [id, n] of el) { r -= n; if (r < 0) return id; }
     return el[el.length - 1][0];
+  }
+
+  /**
+   * [ASSUMED, sp-mp only] Personal shop affinity. Choose the tier with its original copy mass, excluding only tiers
+   * with no unbanned candidate, then choose an unbanned card within that tier. A preferred bond doubles a card's
+   * within-tier weight once even if it appears in several bond positions. The caller supplies its personal GameData
+   * view so slotted DIY pieces use their actual chosen operator's bonds. Other pool.roll callers stay unchanged.
+   */
+  rollShopAffinity(rng, { maxTier = 6, extra = null, banBond = null, preferBond = null, chess }) {
+    const masses = new Map();
+    const candidates = new Map();
+    const scan = (list) => {
+      for (const [id, e] of list) {
+        if (e.left <= 0 || e.tier > maxTier) continue;
+        masses.set(e.tier, (masses.get(e.tier) || 0) + e.left);
+        const bonds = chess(id)?.bonds || [];
+        if (banBond && bonds.includes(banBond)) continue;
+        if (!candidates.has(e.tier)) candidates.set(e.tier, []);
+        candidates.get(e.tier).push([id, e.left * (preferBond && bonds.includes(preferBond) ? 2 : 1)]);
+      }
+    };
+    scan(this.entries);
+    if (extra) scan(extra);
+    const tiers = [...masses.keys()].filter((tier) => candidates.has(tier));
+    const tierMass = tiers.reduce((sum, tier) => sum + masses.get(tier), 0);
+    if (tierMass <= 0) return null;
+    let tierRoll = rng() * tierMass;
+    let chosenTier = tiers.at(-1);
+    for (const tier of tiers) { tierRoll -= masses.get(tier); if (tierRoll < 0) { chosenTier = tier; break; } }
+    const cards = candidates.get(chosenTier);
+    const cardMass = cards.reduce((sum, [, weight]) => sum + weight, 0);
+    let cardRoll = rng() * cardMass;
+    for (const [id, weight] of cards) { cardRoll -= weight; if (cardRoll < 0) return id; }
+    return cards.at(-1)[0];
   }
 
   /** Tier shares of a copy-weighted roll at shop level `maxTier` (current remaining copies). */

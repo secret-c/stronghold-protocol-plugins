@@ -15,3 +15,26 @@ sp-mp/base/**/*.pre-rebase
 Thumbs.db
 desktop.ini
 *.log
+
+# Generated unions in both supported distribution layouts.
+/public/
+/shared/
+/sim/
+/sp-mp/sim/
+**/.union-build.json
+**/install-backup/
+**/.rebase/
+**/*.pre-rebase
+**/docs/screenshots/
+**/node_modules/
+**/portableNode/
+**/public/assets/
+**/public/fonts/
+**/public/vendor/
+/dist/
+/.cache/
+/.update-tmp/
+/.env
+/.env.*
+/*.zip
+/stronghold-stats*.json

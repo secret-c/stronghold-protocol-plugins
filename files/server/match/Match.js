@@ -232,6 +232,8 @@ export class Match {
       throw new TypeError('Match: send/broadcast/onEnd callbacks required');
     }
     this.opts = opts;
+    /** [ASSUMED, sp-mp only] Personal shop bond rules and the shared-pool inspector are opt-in. */
+    this.poolToolsEnabled = opts.poolTools === true;
     this.roomCode = opts.roomCode ?? '----';
     this.mode = opts.mode === 'solo' ? 'solo' : 'coop';
     this.difficulty = opts.difficulty;
@@ -243,11 +245,11 @@ export class Match {
     this.onEndFn = opts.onEnd;
     this.data = opts.data && typeof opts.data === 'object' ? opts.data : {};
     this.gd = new GameData(this.data, this.modeId);
-    // 0.2.4-capacity: the room-wide shared resources (card-pool copies, the hidden-core layer threshold) scale with the
+    // 0.2.6-capacity: the room-wide shared resources (card-pool copies, the hidden-core layer threshold) scale with the
     // seats this match actually has. seatScale is 1 for a room of at most BASE_SEATS players, so the ≤4-player game —
     // and the golden results — is untouched.
     this.gd.seatScale = seatScale(opts.seats.length);
-    // 0.2.4-capacity: the hidden-core layer requirement is a room-wide total, so it needs its own ladder — the owner's
+    // 0.2.6-capacity: the hidden-core layer requirement is a room-wide total, so it needs its own ladder — the owner's
     // choice of 2026-10-11: the 4-player 1200 stands, the 8-seat room asks for 1200 x 1.5 (1800) and 9-12 seats x 3.
     this.gd.hiddenScale = opts.seats.length <= 4 ? 1 : opts.seats.length <= 8 ? 1.5 : 3;
     if (!this.difficulty) this.difficulty = this.gd.difficulty;
@@ -338,7 +340,7 @@ export class Match {
     this.disabledBonds = bans.drawn;
     this.staticInactiveBonds = bans.staticOff;
     this.bannedChess = bans.banned;
-    this.pool = new SharedPool(this.gd, { banned: bans.banned });
+    this.pool = new SharedPool(this.gd, { banned: bans.banned, onChange: () => this.markPool() });
     this.itemPool = new SharedItemPool(this.gd, () => this.order);
     // 自选编队 (0.2.0): each human's slotted DIY pieces get their own stock — none for one whose bonds are all off this
     // match (player/diy.js initDiyStock); no randomness is drawn here
@@ -364,6 +366,7 @@ export class Match {
     this._lastSetupVoteAt = -Infinity;
     this._turnTimer = null;
     this._pubDirty = false;
+    this._poolDirty = this.poolToolsEnabled;
     this._pubTimer = null;
     this._lastPubAt = -Infinity;
     this._lastPubJson = '';

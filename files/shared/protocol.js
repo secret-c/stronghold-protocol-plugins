@@ -28,11 +28,7 @@ const isList = (v, max, item) => Array.isArray(v) && v.length <= max && v.every(
 
 // ---- client-side combat (DESIGN §14): b.progress / b.result payloads -------------------------------------------
 
-/**
- * Size limits of a b.result payload (the whole frame also obeys the 64 KB inbound limit).
- * `players` is the per-battlefield bound (a field holds at most two players — the 联防 / leader pair), `sources` the
- * room-wide one of a 联防 field's `b.progress.left`: every player of a large room may leak onto the same field.
- */
+/** Size limits of a b.result payload (the whole frame also obeys the 64 KB inbound limit). */
 export const RESULT_LIMITS = Object.freeze({ players: 4, sources: MAX_SEATS, leaked: 400, unitsEnd: 64, unitStats: 160, layerGains: 40, mods: 16, unspawned: 400 });
 const BIG = 1e13;
 const isStat = (v) => v === undefined || isNum(v, 0, BIG);
@@ -45,6 +41,7 @@ const isUnitEnd = (u) => isPlain(u) && nullable(isUid)(u.uid) && isNum(u.hpPct, 
   && optional(isBool)(u.skillActive) && nullable(isId)(u.defId);
 const isUnitStat = (u) => isPlain(u) && nullable(isUid)(u.uid) && nullable(isId)(u.defId) && optional((v) => isStr(v, 16))(u.kind)
   && isStat(u.dmg) && isStat(u.kills) && isStat(u.heal) && isStat(u.taken) && isStat(u.attacks);
+const isCombatStat = (u) => Array.isArray(u) && u.length === 9 && nullable(isUid)(u[0]) && isId(u[1]) && u.slice(2).every((n) => isInt(n, 0, BIG));
 const isPerPlayer = (p) => isPlain(p) && isInt(p.killed, 0, 1e5) && isInt(p.total, 0, 1e5)
   // `resolved` = the HUD capsule's numerator of this player's own field (the round's own scheduled enemies knocked out
   // or leaked: server/sim/battle/deploy.js killedInTotal / leakedInTotal, Battle.resolved). `killed` counts every counted
@@ -54,6 +51,7 @@ const isPerPlayer = (p) => isPlain(p) && isInt(p.killed, 0, 1e5) && isInt(p.tota
   && isList(p.leaked, RESULT_LIMITS.leaked, isLeak) && isBool(p.perfect)
   && isMap(p.layerGains, RESULT_LIMITS.layerGains, isId, (v) => isNum(v, 0, 1e4))
   && isStat(p.coins) && isStat(p.damageDealt) && isStat(p.bossDamage) && isStat(p.healingDone) && isStat(p.deaths)
+  && optional((x) => isList(x, 64, isCombatStat))(p.combat)
   && isList(p.unitsEnd, RESULT_LIMITS.unitsEnd, isUnitEnd)
   && (p.unitStats === undefined || isList(p.unitStats, RESULT_LIMITS.unitStats, isUnitStat));
 const isUnspawned = (u) => isPlain(u) && isId(u.enemyKey) && nullable(isId)(u.sourcePlayerId) && nullable((v) => isStr(v, 16))(u.tag)
@@ -385,14 +383,14 @@ export const C2S = {
   hello: { name: (v) => isStr(v, NAME_MAX_LEN) && v.trim().length > 0, token: (v) => v == null || isStr(v, 64), version: (v) => v == null || isInt(v, 0, 1e6),
     noReplace: isBool, claimAt: (v) => isNum(v, 0, Number.MAX_SAFE_INTEGER), $optional: ['token', 'version', 'noReplace', 'claimAt'] },
   ping: { c: (v) => typeof v === 'number' && Number.isFinite(v) },
-  // `capacity` (room capacity, 0.2.4-capacity): one of ROOM_CAPACITIES; left out ⇒ DEFAULT_SEATS (the 4-seat room), so an
-// older client that does not send it keeps creating the room it always made.
-'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
+  'room.create': { mode: (v) => v === 'solo' || v === 'coop', difficulty: (v) => DIFFICULTIES.includes(v), capacity: (v) => ROOM_CAPACITIES.includes(v), $optional: ['capacity'] },
   'room.join': { code: (v) => isStr(v, ROOM_CODE_LEN + 2) && /^[A-Za-z0-9]+$/.test(v) },
   'room.leave': {},
+  // [ASSUMED] Room-wide plain text chat: short, non-empty messages only. The server supplies identity and time.
+  'room.chat': { text: (v) => isStr(v, 200) && v.trim().length > 0 },
   'room.ready': { ready: isBool },
   'room.setDifficulty': { difficulty: (v) => DIFFICULTIES.includes(v) },
-  // room capacity (0.2.4-capacity): host-only, before the match; a value below the highest occupied seat is refused
+  // Local capacity extension: host authorization and occupied-seat checks remain in Lobby.
   'room.setCapacity': { capacity: (v) => ROOM_CAPACITIES.includes(v) },
   // the co-op room option 「AI 队友最后选择」 (GitHub #338; host, before the match): the strategy and 机变 drafts order every
   // human seat before every AI seat (server/match/match/phases.js humansFirst); room.state.aiPicksLast
@@ -422,6 +420,8 @@ export const C2S = {
 
   // match
   'g.infoReady': { setupRevision: (v) => isInt(v, 0, 2 ** 31), $optional: ['setupRevision'] },
+  // [ASSUMED, sp-mp only] Personal ordinary-shop bond ban and within-tier preference; null means skip.
+  'g.shopAffinity': { banBond: nullable(isId), preferBond: nullable(isId), setupRevision: (v) => isInt(v, 0, 2 ** 31) },
   'g.rerollVote': { voteId: (v) => isInt(v, 1, 2 ** 31), agree: isBool },
   'g.band': { bandId: isId },
   'g.bandSkip': {},
@@ -441,7 +441,8 @@ export const C2S = {
   'g.art': { itemUid: isUid, row: (v) => isInt(v, 0, GEO.ROWS - 1), col: (v) => isInt(v, 0, GEO.COLS - 1), dir: isDir, $optional: ['dir'] },
   'g.destroy': { uid: isUid },
   'g.reward': { idx: (v) => isInt(v, 0, 5) },
-  'g.choice': { idx: (v) => isInt(v, 0, 5), choiceId: isId, $optional: ['choiceId'] },
+  // 8/12-seat rooms offer 12/18 机变 cards. Personal PREP choices remain bounded by their actual three-card list.
+  'g.choice': { idx: (v) => isInt(v, 0, 17), choiceId: isId, $optional: ['choiceId'] },
   'g.ready': { ready: isBool },
   'g.emote': { id: (v) => EMOTES.includes(v) },
   // playerId: the player tapped in the team panel (a 联防 / boss pair field shows two) — what an eliminated viewer or a
@@ -478,8 +479,8 @@ export const C2S = {
 // Server → client message types (documentation + client dispatch table keys).
 export const S2C = [
   'welcome', 'ok', 'error', 'pong',
-  'room.state', 'room.closed',
-  'm.public', 'm.private', 'm.field', 'm.toast', 'm.ticker', 'm.emote', 'm.result',
+  'room.state', 'room.closed', 'room.chat', 'room.chatHistory',
+  'm.public', 'm.private', 'm.pool', 'm.field', 'm.toast', 'm.ticker', 'm.emote', 'm.result', 'm.combatLog',
   // m.layer { playerId, bondId, add } — own live prep layer gain; ephemeral, never replayed on resync.
   'm.layer',
   // m.unitStats { seq, round, units: [unitStatsEntry] } — the answer to g.unitStats (the requester only)

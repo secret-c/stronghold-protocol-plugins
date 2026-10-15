@@ -82,7 +82,7 @@ export function bossPoolShareOf(modeScale, cfgScale, isSolo, aliveCount) {
   const n = Number(aliveCount);
   const given = Number.isFinite(n) && n >= 1;
   if (flag('perPlayer', true)) {
-    // 0.2.4-capacity: a room larger than the 4-player baseline scales past `aliveFull` up to the seat bound. A room of
+    // 0.2.6-capacity: a room larger than the 4-player baseline scales past `aliveFull` up to the seat bound. A room of
     // at most four players, and a count left out (a full team), keep exactly the old value.
     const cap = Math.max(full, MAX_SEATS);
     return pick('coop', 1) * (given ? Math.min(cap, Math.floor(n)) : full);
@@ -106,7 +106,7 @@ export class GameData {
     this.modeId = modeId;
     this.mode = getMode(modeId, this.raw) || {};
     /**
-     * Seat scale of this match (0.2.4-capacity, Match.js sets it from the occupied seats): the room-wide shared
+     * Seat scale of this match (0.2.6-capacity, Match.js sets it from the occupied seats): the room-wide shared
      * resources — the shared card pool's copies and the hidden-core layer threshold — are multiplied by it. 1 for the
      * 1–4 player game, so every rule below is the identity for a room of at most BASE_SEATS players.
      */
@@ -320,7 +320,7 @@ export class GameData {
     const base = Number.isInteger(v) && v >= 0 ? v : (DEFAULTS.poolCopies[tier] ?? 10);
     // The measured doubled pool is shared by the whole co-op team, independent of team size. DIY is private stock.
     const multiplier = this.isSolo || this.chess(baseId)?.isDiy ? 1 : posIntOr(this.economy.coopPoolMultiplier, 1);
-    // 0.2.4-capacity: a room bigger than the 4-player baseline gets proportionally more copies (12 seats → ×3, 16 → ×4);
+    // 0.2.6-capacity: a room bigger than the 4-player baseline gets proportionally more copies (12 seats → ×3, 16 → ×4);
     // a room of at most BASE_SEATS players keeps exactly the pool it had (seatScale 1).
     return base * multiplier * this.seatScale;
   }
@@ -330,7 +330,7 @@ export class GameData {
     const base = this.baseIdOf(id), rec = this.item(base);
     if (!rec || !isShopItem(rec)) return null;
     const count = this.economy.itemPoolCopiesOverrides?.[base] ?? this.economy.itemPoolCopies?.[rec.tier];
-    // 0.2.4-capacity: the shared equipment stock scales with the room like the operator pool does (seatScale 1 at ≤4).
+    // 0.2.6-capacity: the shared equipment stock scales with the room like the operator pool does (seatScale 1 at ≤4).
     return Number.isInteger(count) && count >= 0 ? count * (this.isSolo ? 1 : this.seatScale) : null;
   }
 

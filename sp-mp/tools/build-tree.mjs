@@ -27,8 +27,19 @@ const count = (dir) => {
 
 function link(from, to) {
   fs.mkdirSync(path.dirname(to), { recursive: true });
+  try {
+    if (fs.realpathSync(to) === fs.realpathSync(from)) return true;
+  } catch { /* missing or stale target: replace it below */ }
   fs.rmSync(to, { recursive: true, force: true });
-  fs.symlinkSync(from, to, 'junction');
+  try {
+    fs.symlinkSync(from, to, 'junction');
+    return true;
+  } catch (error) {
+    if (!['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) throw error;
+    // Windows without junction permission: copy the resource directory instead.
+    fs.cpSync(from, to, { recursive: true });
+    return false;
+  }
 }
 
 function union(fromDir, toDir, rel = '') {
@@ -41,7 +52,11 @@ function union(fromDir, toDir, rel = '') {
     const relPath = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) {
       const carried = fs.existsSync(path.join(OVERLAY, ...relPath.split('/')));   // the overlay carries files below here
-      if (!carried && JUNCTION.has(relPath.split('/')[0]) && relPath.split('/').length === 1) { link(from, to); links++; continue; }
+      if (!carried && JUNCTION.has(relPath.split('/')[0]) && relPath.split('/').length === 1) {
+        if (link(from, to)) links++;
+        else files += count(to);
+        continue;
+      }
       const sub = union(from, to, relPath);
       files += sub.files; links += sub.links;
       continue;
@@ -78,6 +93,19 @@ const pub = union(path.join(ROOT, 'public'), path.join(MP, 'public'));
 const shared = union(path.join(ROOT, 'shared'), path.join(MP, 'shared'));
 const pubOv = overlayPass('public');
 const sharedOv = overlayPass('shared');
+
+// Standalone releases do not carry the developer-only assemble.mjs. Route the
+// plugin's own browser modules during union build as well as during assembly.
+const ownClient = path.join(MP, 'client');
+const servedClient = path.join(MP, 'public', 'sp-mp', 'client');
+fs.mkdirSync(servedClient, { recursive: true });
+fs.cpSync(ownClient, servedClient, { recursive: true });
+
+// The browser and Node must run the same simulation overrides. /sim/ has its own static mount.
+fs.cpSync(path.join(ROOT, 'server', 'sim'), path.join(MP, 'sim'), { recursive: true });
+if (fs.existsSync(path.join(OVERLAY, 'server', 'sim'))) {
+  fs.cpSync(path.join(OVERLAY, 'server', 'sim'), path.join(MP, 'sim'), { recursive: true });
+}
 
 console.log(`public/: ${pub.files} files copied, ${pub.links} junctions, ${pubOv} overlay files`);
 console.log(`shared/: ${shared.files} files copied, ${shared.links} junctions, ${sharedOv} overlay files`);

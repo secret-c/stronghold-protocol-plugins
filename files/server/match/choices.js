@@ -134,7 +134,7 @@ function itemCard(gd, id) {
 
 /**
  * Build the draft cards for an SP round.
- * @param {object} [opts.family] 0.2.4-capacity: build this family instead of drawing one — a room larger than a single
+ * @param {object} [opts.family] 0.2.6-capacity: build this family instead of drawing one — a room larger than a single
  *   six-card page builds extra pages that must all show the round's one event type (server/match/match/spDraft.js)
  * @returns {{ family: string, name: string, desc: string, eventId: string|null, cards: object[] } | null}
  */

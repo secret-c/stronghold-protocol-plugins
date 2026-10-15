@@ -116,7 +116,7 @@ export class SharedBossPool {
 
 /**
  * Hidden-core eligibility.
- * 0.2.4-capacity: the layer requirement is a room-wide total (every member's bonds add to `layerSum`), so it scales with
+ * 0.2.6-capacity: the layer requirement is a room-wide total (every member's bonds add to `layerSum`), so it scales with
  * the match's seat scale — a 12-seat room must reach three times the layers of the 4-player game (seatScale is 1 at ≤4).
  * @param {import('./gamedata.js').GameData} gd
  * @param {{ layerSum: number, teamLp: number }} s

@@ -19,10 +19,11 @@ const DRAFT_PAGE_CARDS = 6;
 export class MatchSpDraft {
   enterSpDraft() {
     const alive = this.alivePlayers();
-    // 0.2.4-capacity: one six-card page serves up to six pickers. A room with more occupied seats gets as many extra
-    // pages as its pickers plus two spare cards need — every page draws its own six cards of the round's ONE event type
-    // (choices.js generateDraft `family`), and the pages share the turn order, the timers and the sold-out checks.
-    // A room of at most four players builds the single page it always did, with the same rng draws.
+    // 0.2.6-capacity (DESIGN §32.1): one six-card page serves up to six pickers. A room with more occupied seats gets
+    // as many extra pages as its pickers plus two spare cards need — every page draws its own six cards of the round's
+    // ONE event type (choices.js generateDraft `family`). All the pages are ONE board: one turn order, one timer, one
+    // sold-out check and one `taken` set, so the last pickers of a large room still have cards to choose from. A room
+    // of at most four players builds the single page it always did, with the same rng draws.
     const pages = Math.max(1, Math.ceil((alive.length + 2) / DRAFT_PAGE_CARDS));
     const opts = { stageId: this.stageId, bondAvailable: (bondId) => this.bondLive(bondId), itemAvailable: id => this.itemPool.canGain(id) };
     let draft = generateDraft(this.gd, this.rngDraft, this.round, opts);

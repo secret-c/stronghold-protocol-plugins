@@ -232,6 +232,8 @@ export class Match {
       throw new TypeError('Match: send/broadcast/onEnd callbacks required');
     }
     this.opts = opts;
+    /** [ASSUMED, sp-mp only] Personal shop bond rules and the shared-pool inspector are opt-in. */
+    this.poolToolsEnabled = opts.poolTools === true;
     this.roomCode = opts.roomCode ?? '----';
     this.mode = opts.mode === 'solo' ? 'solo' : 'coop';
     this.difficulty = opts.difficulty;
@@ -338,7 +340,7 @@ export class Match {
     this.disabledBonds = bans.drawn;
     this.staticInactiveBonds = bans.staticOff;
     this.bannedChess = bans.banned;
-    this.pool = new SharedPool(this.gd, { banned: bans.banned });
+    this.pool = new SharedPool(this.gd, { banned: bans.banned, onChange: () => this.markPool() });
     this.itemPool = new SharedItemPool(this.gd, () => this.order);
     // 自选编队 (0.2.0): each human's slotted DIY pieces get their own stock — none for one whose bonds are all off this
     // match (player/diy.js initDiyStock); no randomness is drawn here
@@ -364,6 +366,7 @@ export class Match {
     this._lastSetupVoteAt = -Infinity;
     this._turnTimer = null;
     this._pubDirty = false;
+    this._poolDirty = this.poolToolsEnabled;
     this._pubTimer = null;
     this._lastPubAt = -Infinity;
     this._lastPubJson = '';

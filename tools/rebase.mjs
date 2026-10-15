@@ -82,6 +82,7 @@ for (const rel of overlayFiles) {
   const baseText = read(baseFile);
   const theirsText = read(theirsFile);
 
+  if (theirsText === null && baseText === null) { untouched.push(`${rel} (overlay-only module)`); continue; }
   if (theirsText === null) { failed.push(`${rel}: gone from the install (was it removed upstream?)`); continue; }
   if (baseText === null) { failed.push(`${rel}: no base copy — run tools/assemble.mjs first`); continue; }
   if (baseText === theirsText) { untouched.push(rel); continue; }

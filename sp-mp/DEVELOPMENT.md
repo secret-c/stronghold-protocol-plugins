@@ -1,139 +1,55 @@
-# sp-mp 开发指南（给下一位 agent / 维护者）
+# sp-mp 开发指南
 
-这是一份**交接文档**：结构、约定、宿主接口、以及我们踩过的坑。动手前请把「铁律」和「已知坑」两节读完，它们每一条都是真实翻车换来的。
+适配本体0.2.6，运行清单见 plugin.json。项目根目录是唯一日常开发源，sp-mp/client 是插件界面源码；sp-mp/files/public/shared/sim 是生成物，base 保留0.2.6原始对照。不要手改生成物，不提交游戏素材。
 
----
+## 数据链路
 
-## 1. 这是什么
+根目录源码 → tools/assemble.mjs → files；tools/build-tree.mjs → public/shared/sim 联合目录。start.mjs 注册Node解析钩子，并传 publicDir/sharedDir/simDir 给服务端；浏览器和Node必须加载同份sim补丁。正常启动器不写安装文件；install-patch 是可还原的直接安装备选，新增客户端文件也必须复制并在还原时移除。
 
-`sp-mp` 是《卫戍协议：盟约》网页复刻（[上游 sganggs/Stronghold-Protocol](https://github.com/sganggs/Stronghold-Protocol)）的**叠加层插件**：
+## 伤害统计
 
-| 功能 | 说明 |
-| --- | --- |
-| 多人容量 | 同盟房间 4 / 8 / 12 座；共享卡池、装备库存、机变页数、隐藏核心层数门槛随**实际参战人数**缩放；4 人及以下与原版逐字节等价 |
-| 联防优先真人 | `unite.js helperOrder`：真人整体排在 AI 席位之前，各自内部保持官方择优顺序 |
-| 伤害统计面板 | 纯客户端：左下角 📊（全屏按钮左侧），实时列出自己场上干员的伤害/占比/类型/击杀/承伤 |
+client/client.js 自持DOM，使用 __SP__.net.playerId 与 __SP_RUNNER__.currentBattle()/combatStats(ownerId,fieldId)。combatStats 是本包叠加给runner的只读查询，返回每个干员 unitId/uid/defId/name/alive/dmg/byType/kills/heal/taken；宿主原版没有该接口，缺失时应提示而不是显示假0。
 
-## 2. 目录结构与数据流
+统计在 server/sim/damage.js 的 applyHpLoss 中，与 stats.dmg 同处用实际 dealt 记入WeakMap。四类 phys/arts/elemental/true；element仅为元素积累不计，生命流失沿引擎true。溢出、护盾、自伤/友伤排除，来源归属与既有引擎一致。[ASSUMED 展示归组] 召唤物沿ownerUnit链归自己召唤者；无归属地图角色不进干员表。击杀/承伤/治疗是本体统计。WeakMap不进入结果、事件或golden摘要，也不被游戏逻辑读取。
 
-```
-<安装目录>/
-├─ sp-mp/                         ← 插件本体（本仓库）
-│  ├─ plugin.json                 ← 版本、支持的上游版本（supports）、文件清单
-│  ├─ hooks.mjs                   ← Node 模块解析钩子：server/ 与 shared/ 的覆盖
-│  ├─ start.mjs / start-windows.cmd / start.sh   ← 启动器（注册钩子 + 把 publicDir/sharedDir 指向联合目录）
-│  ├─ client/                     ← 插件的客户端模块（源头）
-│  │  ├─ entry.js                 ← 被叠加层 index.html 引导
-│  │  ├─ client.js                ← 面板本体（DOM + 取数 + 累计）
-│  │  └─ client.css               ← 面板样式（全 sp-mp- 前缀）
-│  ├─ files/                      ← 覆盖安装的文件（服务端 12 个 + 客户端 16 个 + index.html 注入版）
-│  ├─ base/                       ← 上面这些文件在**上游对应版本**里的原样副本（rebase 的三方合并基准）
-│  ├─ public/、shared/            ← **生成的**联合目录（不要手改、不要提交）
-│  ├─ tools/
-│  │  ├─ assemble.mjs             ← 生成 files/ 与 base/：按**内容差异**自动判定覆盖哪些文件 + 注入 index.html + 路由 client/
-│  │  ├─ build-tree.mjs           ← 生成联合目录（未改的文件复制/联结点到安装，改过的用叠加层版本）
-│  │  ├─ rebase.mjs               ← 上游更新后的三方合并（base=旧上游 / ours=我们的改动 / theirs=新安装）
-│  │  └─ install-patch.mjs/.cmd   ← 可选：把覆盖文件直接打进安装（会破坏 MANIFEST，官方更新包必须先 revert）
-│  └─ sp-4-12-16/                 ← 开发树（普通 git 仓库；基线提交 = 上游某个版本，功能提交 = 容量扩展）
-└─ server/ shared/ public/ …      ← 安装（**一个字节都不要改**）
-```
+一人一个堆叠条，条长/最高干员伤害，分段/本人的总伤害。总计与hover分类都来自同份byType。采集由引擎完成，面板打开时间不影响累计；Unit对象在死亡/再部署间保留，新战斗新对象自然清空，切场只查询当前战斗。不要重新用HP轮询估算输出伤害：旧版不仅ownerOps没有uid，而且把自己承伤当输出。
 
-数据流（三层，缺一不可）：
+## 同盟聊天
 
-```
-开发树 sp-4-12-16/  ──assemble──▶  sp-mp/files/  ──build-tree──▶  sp-mp/public/ (联合目录)  ──start.mjs──▶  浏览器
-                            │                      │
-                            └──── base/（=安装原样）┘        hooks.mjs ──▶ 服务端 server/·shared/ 的覆盖
-```
+房间消息走 `room.chat {text}`，由 Lobby 根据真实 session/seat 决定发送者、时间和房间；观战席只读。每房内存保留最近100条，跨备战、战斗、结算和下一局，创建/加入/重连时单独推送 `room.chatHistory`；`code + seq` 让客户端与直播消息去重。单条最多200字符、同一身份1秒内至多一条，服务端清理控制字符。界面在 `client/client.js` 自持 DOM，消息只用 `textContent` 渲染，发送失败保留输入框文本。聊天和伤害/最近一局面板互斥；聊天输入聚焦时不触发游戏快捷键。
 
-## 3. 铁律
+对应协议、生命周期与限制见根目录 `docs/design/network.md` §8.1；验证见 `test/lobby-chat.test.js`、`sp-mp/tools/test-client.mjs`、`sp-mp/tools/test-browser-chat.mjs`。插件新文案须同时加进根目录四份 `public/i18n/*.json`，再由 assemble 复制到包内。浏览器测试前须先运行 assemble、build-tree，以免 `/sp-mp/client/` 仍是旧副本。
 
-1. **不改安装里的任何文件**。`sp-mp/files/` 里放的是“加载时顶替”的副本，安装目录必须保持与 `MANIFEST.json` 一致（`node tools/doctor.mjs` 要报“全部一致”）。这是官方更新包还能用的前提。
-2. **客户端功能优先做进 `sp-mp/client/`**，不要去覆盖宿主的 `public/js/**`。新增宿主没有的文件由联合目录提供，不影响 MANIFEST；而覆盖宿主文件会让 rebase 冲突面变大、也更容易把宿主改坏。
-3. **只用宿主已经公开的入口**（见 §4）。不要 import 宿主的内部模块——宿主内部结构一变，你的模块会在**解析阶段**就整条链失败（见坑 #1）。
-4. **`files/`、`base/`、`public/`、`shared/` 都是生成物**：改代码请改开发树或 `client/`，然后重新 assemble；不要手改生成物。
-5. **改完必须验证**（§7 的命令），并至少跑一遍插件的客户端回归测试。
-6. **提交信息**写清“做了什么 / 为什么 / 出处”，不要加 AI 署名 trailer；仓库非商业、不带任何官方素材。
+## 卡池与个人商店盟约（1.6.0）
 
-## 4. 可用的宿主接口（只读）
+这是用户指定的插件玩法，[ASSUMED]、不代表官方规则。启动器显式启用 `poolTools`；直接安装时，服务端只在所服务 `public/index.html` 引用了插件 entry 且 entry 文件实际存在时启用；普通宿主默认关闭。INFO_CHECK 每名玩家可只选禁用、只选偏好、同时选两个不同盟约，或整体跳过；超时未选等于跳过，重抽开局清掉旧选择。仅本人普通商店棋子槽受影响：先按个人禁用前的各阶剩余复制数抽可用等阶，整阶无未禁卡才重分配阶质量；再在该阶排除任意位置含禁用盟约的卡，将任意位置含偏好盟约的卡复制权重乘2一次。完全无候选时该槽为空，不放回禁用卡。奖励、道具、队友抽卡规则不变；选择不会删除共享池的卡。
 
-服务端（通过 `hooks.mjs` 覆盖的文件里可以直接用，等于宿主内部）：
+`m.pool` 公布本局共享普通基础卡的 `cap / left / overdraw`，包含剩余0；`m.private.diyPoolEntries` 只给本人显示独立自选库存。商店展示不预占，购买时才扣；已展示缺货卡仍可购买并形成负余额，面板把剩余钳到0、超额量另列。库存推送覆盖 take/give 与重连；`m.private.shopAffinity` 回补个人选择。界面按等阶列表，可筛等阶/盟约与搜索名称，左侧拉出；与聊天、伤害统计等面板互斥。根目录的规则与协议见 `docs/design/match.md`、`docs/design/network.md`，版本记录在 `docs/history/sp-mp-1.6.0.md`。针对验证：`test/match/pool-affinity.test.js`。
 
-- `shared/constants.js` 的常量、`GameData`（`gamedata.js`）、`Match` / `MatchSpDraft` / `PlayerState` 的方法。
+更新叠加层后重启服务并在客户端硬刷新，使浏览器重新加载联合目录的页面、脚本和数据。
+`start.mjs` 只复用在启动时报告当前插件版本与包签名、聊天/卡池能力、并实际提供插件入口的服务；同端口旧宿主会报错并要求关闭旧进程或换端口。`/healthz.capabilities` 只在服务端启用插件卡池规则时出现，客户端用它区分旧服务和暂时网络故障，发送失败仍保留草稿。
 
-客户端（**插件唯一应该依赖的东西**，都由宿主自己挂在全局）：
+## 验证
 
-| 入口 | 内容 |
-| --- | --- |
-| `window.__SP__` | `{ store, net, data }`（`public/js/main.js` 挂）。`net.playerId` = 自己的 playerId |
-| `window.__SP_RUNNER__` | 战斗 runner（`public/js/battle/runner.js` 挂）。只读查询：`currentBattle()` → `{battleId, fieldId, kind, spec, time}`；`ownerOps(ownerId, fieldId)` → 自己的干员 `[{kind:'op', ownerId, defId, uid, items?}]`；`unitIdOf(uid, ownerId, fieldId)` → 该干员在当前战斗里的单位 id；`unitStats(unitId, fieldId)` → 实时数值（`unitStatsEntry`：hp/maxHp/atk/def/res/interval/blockCnt/moveSpeed/range/dir，**不含战斗统计**） |
-| `data.js`（经 `__SP__.data`） | `lookup('chess', id)` → 干员记录（含 `name`、`dmgType`、`skills`、`talents`、`trait`）；`get('assets')` → 资源清单（头像） |
-| DOM 钩子 | `.gm__corner`（左下角按钮排）、`.gm__fs`（全屏按钮）、`.gm__gear`（按钮样式类） |
+在安装根目录：
 
-**没有得到的东西**：宿主不暴露“按伤害类型统计的伤害量”“每单位击杀/治疗”。所以要类型构成只能从干员记录推（见 `client.js typeOf()`）；要精确分类需要改宿主 `unitStatsEntry`，那违反铁律 1，除非维护者另行决定。
-
-## 5. 构建与发布
-
-```bash
-# 1) 改代码：服务端/共享改动在开发树 sp-4-12-16/ 里改；纯客户端改动在 sp-mp/client/ 里改
-# 2) 重新生成叠加层（自动：按内容差异算覆盖清单、注入 index.html、路由 client/）
-node sp-mp/tools/assemble.mjs            # 加 --list 只看清单
-node sp-mp/tools/build-tree.mjs          # 重建联合目录
-# 3) 验证（见下）
-# 4) 提交并推送（本机到 github.com 直连不稳，push 要重试）
-```
-
-上游发新版之后：
-
-```bash
-node sp-mp/tools/rebase.mjs --dry-run    # 先看官方改了哪些被覆盖的文件
-node sp-mp/tools/rebase.mjs              # 三方合并；冲突留在 files/ 里带 <<<<<<< 标记
+```sh
+node sp-mp/tools/assemble.mjs
 node sp-mp/tools/build-tree.mjs
-# 顺手把 plugin.json 的 supports/base 更新（无冲突时 rebase 会自动写）
+node sp-mp/tools/test-client.mjs
+node sp-mp/tools/test-overlay.mjs
 ```
 
-## 6. 已知坑（每条都真踩过）
+在项目根目录：
 
-1. **ESM 具名导出错误 = 整条模块链挂掉**。`import { GIcon } from './components.js'`（实际在 `gameComponents.js`）会让 `main.js → game.js → 你的模块` 在解析阶段全部失败，页面显示「游戏脚本加载失败」。**只查 HTTP 200 查不出来**：必须用真正的 ESM 加载器验证（见 §7）。提交前请对每个新模块跑一次。
-2. **`assemble.mjs` 的覆盖清单已改为按内容差异自动判定**。历史上它是手工清单，`unite.js` 漏在里面导致“改了服务端却没生效”。**不要**再引入手工清单；新目录（如 `client/`）要显式加进 `walkClient()` 或路由逻辑。
-3. **服务端只服务安装目录与联合目录**：插件的客户端文件必须**路由**进 `public/`（`assemble.mjs` 已把 `client/` 复制到 `public/sp-mp/client/`），否则 `/sp-mp/client/xxx.js` 是 404。
-4. **`statView()` 只返回属性**（maxHp/atk/def/res/interval/blockCnt/moveSpeed），没有 `dmg`。伤害要靠客户端累计 HP 减少量；口径按宿主定义「只统计从对方身上移除的生命值」，护盾吸收不算。
-5. **Windows 上的 PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI 读**：脚本里有中文时语法会崩（报错却指向奇怪的位置）。给 `powershell.exe -File` 用的脚本要么纯 ASCII，要么写 BOM。
-6. **`cmd.exe /c` 或任何“带管道 spawn 子进程”的写法在本机沙箱里可能报 `couldn't create signal pipe` / `EPERM`**：读 git 凭据请用 PowerShell 自己的管道（`$cred | git credential fill`），不要经过 `cmd.exe`。
-7. **到 github.com 的直连不稳定**：`git push` 会随机 `Recv failure: Connection was reset` / 443 超时。**重试 10 次左右通常能过**；只有 fetch/clone 可以借 `https://ghproxy.net/<原 URL>`，它的 `git-receive-pack`（push）返回 401，不能用于推送。
-8. **不要用 `robocopy /MIR` 同步插件目录**（会删掉仓库侧独有的文件），用 Node 的 `fs.cpSync` 或逐文件复制。
-9. **i18n**：插件客户端的字符串现在**自带**在 `client.js`（不走宿主 `t()`），所以不会触发宿主的 i18n 检查；如果哪天要跟随宿主语言，用 `__SP__.store`/`data` 里的语言设置自己映射。
-10. **`sp-mp/README.md` 是给玩家看的说明**，本文件是给开发者的；两边的文件数/版本号要保持一致（`plugin.json` 的 `files`/`publicFiles`/`clientFiles`）。
-
-## 7. 验证清单（改完必跑）
-
-```bash
-# 0) 安装仍是原版（不变量）
-cd <安装目录> && node tools/doctor.mjs           # 期望「6480 个文件与 v0.2.6 一致」
-
-# 1) 叠加层与安装同步
-node sp-mp/tools/rebase.mjs --dry-run            # 期望「upstream did not touch: 28」（数字 = base 里的文件数）
-
-# 2) 客户端模块能被真正的 ESM 加载器加载（坑 #1 的守门）
-node -e "const {pathToFileURL}=await import('node:url');
-  for (const p of ['/sp-mp/client/client.js','/sp-mp/client/entry.js'])
-    await import(pathToFileURL('E:/code/wsl_dsh/wei/Stronghold-Protocol'+p).href);
-  console.log('ok')" --input-type=module
-
-# 3) 客户端逻辑回归（Node + 最小 DOM 桩）：按钮插入、playerId 解析、伤害累计、护盾口径、换场清空、类型构成
-node sp-mp/tools/test-client.mjs                 # 若放在仓库里；否则用开发机上的同一份脚本
-
-# 4) 起服并确认首页引导与静态路由
-node sp-mp/start.mjs                             # 首行应打印 overlay files / client files 数
-#  浏览器硬刷新后：左下角出现 📊；面板打开不报错
+```sh
+node --test test/match/pool-affinity.test.js test/match/capacity-wire-choice.test.js
+npm run ci
+npm run golden
 ```
 
-## 8. 当前状态与待办
+修改接口后验证真实ESM加载和HTTP的 /sim/damage.js、/js/battle/runner.js、/sp-mp/client/entry.js；仅检查200不能验证模块链接。测试不能mock宿主不存在的字段。根目录运行源码可改，但不能手改data/*.json、提交素材或推送未授权改动。提交无AI署名，非商业。发行使用 `node sp-mp/tools/export-version.mjs` 生成新的未压缩 `dist/` 版本目录；已有目录绝不覆盖。
 
-- 版本 `1.2.0`，基线上游 `v0.2.6`；覆盖 28 个文件（含注入版 `index.html`）+ 3 个自持客户端文件。
-- 已完成：4/8/12 容量、联防优先真人、伤害统计面板（含类型标签与类型构成）。
-- 待办 / 可做：
-  - 面板的“治疗/击杀/承伤”目前只在宿主提供时才显示（`unitStatsEntry` 不带时显示 `—`）；想要精确数值需要宿主侧扩展（需维护者拍板）。
-  - 伤害类型目前是**按干员主攻击类型**推断；精确到“每次伤害的类型占比”同样需要宿主扩展。
-  - 可以把 `test-client.mjs` 收进 `tools/`，并在 `plugin.json` 里挂一个 `verify` 脚本。
-  - 12 人房的伤害面板顺序可以按“当前伤害速率”而非累计值排序（需要记录时间窗口）。
+## 插件仓库发布
+
+日常开发仍在完整游戏项目根目录进行，先运行 assemble 刷新本地 files。向 https://github.com/secret-c/stronghold-protocol-plugins 的 main 发布时，在基于该仓库 main 的隔离工作树同步插件；不要把游戏主仓库的不同历史覆盖到插件 main。分发仓库显式跟踪 files/base/client，它们是安装所需文件；public/shared/sim 联合目录、截图、素材和依赖不入库。仓库顶层的早期插件副本与 sp-mp/ 同步相同版本，标准安装仍复制 sp-mp/。assemble 和完整版本导出只在完整游戏开发根运行，纯插件 checkout 不需要执行它们。

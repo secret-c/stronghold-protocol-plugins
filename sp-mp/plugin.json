@@ -1,14 +1,14 @@
 {
   "name": "sp-mp",
   "displayName": "多人容量叠加层 · Multiplayer capacity overlay",
-  "version": "1.2.1",
-  "description": "Co-op rooms of 4 / 8 / 12 seats, a 联防 helper order that prefers humans, and a self-contained client-side 伤害统计 damage panel for Stronghold-Protocol - loaded as an overlay (the install stays pristine, official update packages keep working).",
+  "version": "1.6.1",
+  "description": "Co-op rooms of 4 / 8 / 12 seats, damage statistics, room chat, and a shared-pool viewer with personal shop bond choices, loaded as an overlay without changing the original install.",
   "base": "0.2.6",
   "supports": [
     "0.2.6"
   ],
-  "files": 28,
-  "publicFiles": 16,
+  "files": 52,
+  "publicFiles": 20,
   "entry": "start.mjs",
   "hooks": "hooks.mjs",
   "rebase": "tools/rebase.mjs",
@@ -27,7 +27,11 @@
     },
     "unitePrefersHumans": true,
     "damagePanel": true,
-    "clientPlugin": "sp-mp/client/entry.js"
+    "clientPlugin": "sp-mp/client/entry.js",
+    "latestMatchStatistics": true,
+    "roomChat": true,
+    "poolInspector": true,
+    "personalShopAffinity": true
   },
   "clientFiles": 3,
   "docs": {

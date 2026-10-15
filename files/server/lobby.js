@@ -123,6 +123,10 @@ export const LOBBY_DEFAULTS = Object.freeze({
 /** Official `singleReconnectTime` (s) when the data lacks it (constData, research 01 §1). */
 export const SOLO_RECONNECT_FALLBACK_SEC = 86_400;
 
+// [ASSUMED] Chat is ephemeral room data, kept across its matches and discarded with the room.
+export const CHAT_KEEP = 100;
+export const CHAT_COOLDOWN_MS = 1000;
+
 /** Display names for AI teammates (the tutorial NPCs first, then a few familiar faces). */
 export const BOT_NAMES = Object.freeze(['AI·华法琳', 'AI·阿米娅', 'AI·惊蛰', 'AI·杜宾', 'AI·凯尔希', 'AI·可露希尔']); // i18n-ignore: player names (docs/I18N.md)
 
@@ -192,6 +196,9 @@ export class Room {
     this.seats = new Array(this.capacity).fill(null);
     /** @type {{ playerId: string, name: string, connected: boolean }[]} spectator seats, ≤ MAX_SPECTATORS (header) */
     this.spectators = [];
+    /** @type {{ t: string, code: string, seq: number, playerId: string, name: string, text: string, at: number }[]} */
+    this.chatHistory = [];
+    this.chatSeq = 0;
     /** @type {any} running Match instance */
     this.match = null;
     /** @type {{ live: boolean, ended: boolean, disposed: boolean, match: any } | null} */
@@ -344,6 +351,7 @@ export class Lobby {
       case 'room.create': return this.create(session, msg);
       case 'room.join': return this.join(session, msg);
       case 'room.leave': return this.leave(session);
+      case 'room.chat': return this.chat(session, msg);
       case 'room.ready': return this.ready(session, msg);
       case 'room.setDifficulty': return this.setDifficulty(session, msg);
       case 'room.setCapacity': return this.setCapacity(session, msg);
@@ -434,6 +442,7 @@ export class Lobby {
     session.pendingResult = null;
     this.log.info(`[lobby] ${code} created (${mode}/${difficulty}, ${room.capacity} seats) by ${session.name}`);
     this.broadcastState(room);
+    this.sendChatHistory(room, session);
     return OK;
   }
 
@@ -443,7 +452,7 @@ export class Lobby {
     if (!room) return fail(ERR.ROOM_NOT_FOUND);
     const cur = this.roomOf(session);
     // idempotent for members; a spectator of this room goes on below: it may take a free player seat (header)
-    if (cur === room && !room.spectatorOf(session.playerId)) { this.sendState(room, session); return OK; }
+    if (cur === room && !room.spectatorOf(session.playerId)) { this.sendState(room, session); this.sendChatHistory(room, session); return OK; }
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     if (room.match) return fail(ERR.ROOM_STARTED);
     if (room.mode === 'solo') return fail(ERR.ROOM_FULL, 'solo room');
@@ -456,6 +465,7 @@ export class Lobby {
     session.pendingResult = null;
     if (!room.hostId) room.hostId = session.playerId;
     this.broadcastState(room);
+    this.sendChatHistory(room, session);
     return OK;
   }
 
@@ -478,6 +488,7 @@ export class Lobby {
     if (cur === room) {
       if (!room.spectatorOf(session.playerId)) return fail(ERR.ALREADY, 'seated as a player');
       this.sendState(room, session);
+      this.sendChatHistory(room, session);
       return OK;
     }
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
@@ -489,7 +500,28 @@ export class Lobby {
     session.notice = null;
     session.pendingResult = null;
     this.broadcastState(room);
+    this.sendChatHistory(room, session);
     if (room.match) this.callMatch(room, 'addSpectator', session.playerId);
+    return OK;
+  }
+
+  /** One room-wide plain text message. Identity and timestamp are server-owned; spectators only read. */
+  chat(session, { text }) {
+    const room = this.roomOf(session);
+    if (!room) return fail(ERR.NOT_IN_ROOM);
+    if (room.spectatorOf(session.playerId)) return fail(ERR.SPECTATOR);
+    const seat = room.seatOf(session.playerId);
+    if (!seat || seat.isBot || seat.left) return fail(ERR.NOT_IN_ROOM);
+    const cleaned = String(text).replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+    if (!cleaned) return fail(ERR.BAD_MSG, 'empty chat message');
+    const now = this.now();
+    if (now - (session.chatAt ?? -Infinity) < CHAT_COOLDOWN_MS) return fail(ERR.RATE);
+    session.chatAt = now;
+    const msg = { t: 'room.chat', code: room.code, seq: ++room.chatSeq,
+      playerId: session.playerId, name: seat.name, text: cleaned, at: now };
+    room.chatHistory.push(msg);
+    if (room.chatHistory.length > CHAT_KEEP) room.chatHistory.shift();
+    this.broadcastRoom(room, msg);
     return OK;
   }
 
@@ -540,7 +572,7 @@ export class Lobby {
   }
 
   /**
-   * room.setCapacity (0.2.4-capacity): host-only, before the match. Growing the room appends empty seats; shrinking it
+   * room.setCapacity (0.2.6-capacity): host-only, before the match. Growing the room appends empty seats; shrinking it
    * below the highest occupied seat (a human or an AI teammate) is refused, so nobody is ever moved or ejected. The
    * members keep their seats, their ready state and their stored loadout — a match only ever sees the occupied seats.
    */
@@ -758,7 +790,7 @@ export class Lobby {
       diy: s.isBot ? null : s.diy || null,
     }));
     // lastPublic / results: the latest m.public broadcast and the m.result frames (encoded), kept for the replay.
-    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null, results: new Map() };
+    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, lastPool: null, sharedResult: null, results: new Map() };
     let seed = 0;
     try { seed = this.seedFn() >>> 0; } catch { seed = randomInt(2 ** 32); }
     try {
@@ -769,6 +801,7 @@ export class Lobby {
         modeId: modeIdFor(room.mode, room.difficulty),
         // 「AI 队友最后选择」 (GitHub #338): fixed for the match
         aiPicksLast: room.mode !== 'solo' && room.aiPicksLast === true,
+        poolTools: this.opts.poolTools === true,
         seats,
         // the spectator seats (header): watched like eliminated players, never players
         spectators: room.spectators.map((s) => s.playerId),
@@ -840,6 +873,7 @@ export class Lobby {
     const data = this.broadcastRoom(room, msg);
     if (data == null) return;
     if (msg.t === 'm.public') ctx.lastPublic = data;
+    else if (msg.t === 'm.pool') ctx.lastPool = data;
     else if (msg.t === 'm.result') ctx.sharedResult = data;
   }
 
@@ -856,14 +890,14 @@ export class Lobby {
       if (frame) frames.set(s.playerId, frame);
     }
     if (frames.size === 0) return null;
-    return { publicFrame: ctx.lastPublic, frames, pending: new Set(frames.keys()) };
+    return { publicFrame: ctx.lastPublic, poolFrame: ctx.lastPool, frames, pending: new Set(frames.keys()) };
   }
 
   /** The replay frames still owed to a player (null when they moved on). @returns {string[] | null} */
   replayFor(room, playerId) {
     const r = room.replay;
     if (!r || !r.pending.has(playerId)) return null;
-    return [r.publicFrame, r.frames.get(playerId)].filter(Boolean);
+    return [r.publicFrame, r.poolFrame, r.frames.get(playerId)].filter(Boolean);
   }
 
   /** The player moved on from the result screen (acted in the room, left): stop replaying it. */
@@ -903,6 +937,7 @@ export class Lobby {
     const room = this.roomOf(session);
     if (!room) return;
     session.resyncAt = this.now();
+    this.sendChatHistory(room, session);
     if (room.match) {
       this.callMatch(room, room.spectatorOf(session.playerId) ? 'addSpectator' : 'onReconnect', session.playerId);
       return;
@@ -1162,6 +1197,10 @@ export class Lobby {
 
   sendState(room, session) {
     sendSession(session, room.toState());
+  }
+
+  sendChatHistory(room, session) {
+    sendSession(session, { t: 'room.chatHistory', code: room.code, messages: room.chatHistory });
   }
 
   /** Match broadcast: encode once, send to every connected member. @returns {string | null} the encoded frame */

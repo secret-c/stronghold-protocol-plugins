@@ -63,7 +63,7 @@ const bool = (v, d = false) => (typeof v === 'boolean' ? v : d);
 const str = (v, max = 64) => (typeof v === 'string' && v.length ? v.slice(0, max) : null);
 
 // per-record bounds (an imported file is foreign data: nothing a row holds may grow without limit)
-const MAX_PLAYERS = MAX_SEATS; // 0.2.4-capacity: a room seats 4 / 8 / 12 — a record keeps every seat of its match
+const MAX_PLAYERS = MAX_SEATS; // 0.2.6-capacity: a room seats 4 / 8 / 12 — a record keeps every seat of its match
 const MAX_LINEUP = 12;
 const MAX_ITEMS = 4;
 const MAX_BONDS = 24;

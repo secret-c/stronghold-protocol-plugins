@@ -1,18 +1,33 @@
-// sp-mp/start.mjs — start the pristine install WITH the multiplayer overlay, without touching a single installed file.
+// sp-mp/start.mjs — start the editable project root through the multiplayer overlay.
 //
 //   node sp-mp/start.mjs [--port 3000] [--host ::] [--no-open]
 //
-// The overlay carries 28 runtime files (4 / 8 / 12-seat co-op rooms). They are loaded through Node's module hooks and
-// served from the union trees under sp-mp/, so `npm run doctor` keeps reporting an untouched install and an official
-// Stronghold-Protocol-v0.2.x-update.zip still applies. See README.md for the update workflow.
+// The overlay carries generated runtime differences against the 0.2.6 baseline. Node hooks and union client trees
+// ensure the edited root runs with the same plugin files as the exported version. See README.md for the workflow.
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import Module, { register } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MP = path.resolve(fileURLToPath(new URL('.', import.meta.url)));
 const ROOT = path.dirname(MP);
 const manifest = JSON.parse(fs.readFileSync(path.join(MP, 'plugin.json'), 'utf8'));
+const signature = (() => {
+  const hash = createHash('sha256');
+  const include = (base, rel = '') => {
+    for (const ent of fs.readdirSync(path.join(base, rel), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const next = rel ? `${rel}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) include(base, next);
+      else if (ent.isFile()) { hash.update(`${path.basename(base)}/${next}\0`); hash.update(fs.readFileSync(path.join(base, next))); }
+    }
+  };
+  include(path.join(MP, 'files'));
+  include(path.join(MP, 'client'));
+  return hash.digest('hex').slice(0, 16);
+})();
+const spMp = Object.freeze({ version: manifest.version, signature });
 
 const argv = process.argv.slice(2);
 const arg = (name) => {
@@ -35,6 +50,26 @@ if (!manifest.supports.includes(installed)) {
   console.error('        Or run anyway:    SP_MP_FORCE=1 node sp-mp/start.mjs\n');
   if (!force) process.exit(2);
   console.error('[sp-mp] SP_MP_FORCE=1 — starting anyway.\n');
+}
+
+// A distributed overlay has no machine-specific union tree. Rebuild it on first launch
+// (and after moving or replacing the overlay), so players never need a command prompt.
+const unionStamp = path.join(MP, '.union-build.json');
+const unionKey = JSON.stringify({ root: fs.realpathSync(ROOT), signature: spMp.signature });
+const unionFiles = ['public/index.html', 'public/sp-mp/client/entry.js', 'public/sp-mp/client/client.css', 'shared/constants.js', 'sim/spec.js'];
+const unionReady = () => unionFiles.every((rel) => fs.existsSync(path.join(MP, rel)));
+if (!unionReady() || !fs.existsSync(unionStamp) || fs.readFileSync(unionStamp, 'utf8') !== unionKey) {
+  console.log('[sp-mp] 首次启动或文件更新：正在准备游戏页面，请稍候…');
+  const built = spawnSync(process.execPath, [path.join(MP, 'tools', 'build-tree.mjs')], { cwd: ROOT, stdio: 'inherit' });
+  if (built.error || built.status !== 0) {
+    console.error('[sp-mp] 页面准备失败。请检查游戏文件是否完整，再重新双击启动。');
+    process.exit(2);
+  }
+  if (!unionReady()) {
+    console.error('[sp-mp] 页面文件不完整，请检查扩充包后重新启动。');
+    process.exit(2);
+  }
+  fs.writeFileSync(unionStamp, unionKey);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -69,6 +104,25 @@ const open = async (url) => {
 
 const live = await alreadyRunning(port);
 if (live) {
+  const expected = live.spMp?.version === spMp.version && live.spMp?.signature === spMp.signature
+    && live.capabilities?.roomChat === true && live.capabilities?.poolTools === true;
+  let entryMatches = false;
+  if (expected) {
+    try {
+      const [index, entry] = await Promise.all([
+        fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) }),
+        fetch(`http://127.0.0.1:${port}/sp-mp/client/entry.js`, { signal: AbortSignal.timeout(1500) }),
+      ]);
+      entryMatches = index.ok && entry.ok && (await index.text()).includes('/sp-mp/client/entry.js')
+        && (await entry.text()) === fs.readFileSync(path.join(MP, 'client', 'entry.js'), 'utf8');
+    } catch { /* an unreadable client is not the current plugin service */ }
+  }
+  if (!expected || !entryMatches) {
+    console.error(`\n[sp-mp] 端口 ${port} 已由另一个服务占用，且不是当前 ${manifest.version} 叠加层（或其客户端文件不匹配）。`);
+    console.error('        请关闭占用该端口的旧服务器窗口后重新启动本启动器；也可用 --port 3001 换端口。');
+    console.error(`        port ${port} is serving a different build; stop that server or choose another port.\n`);
+    process.exit(3);
+  }
   console.log(`\n[sp-mp] 端口 ${port} 上已经有一个服务器在跑了（app ${live.app}，已运行 ${live.uptimeSec} 秒，房间 ${live.rooms}）。`);
   console.log(`        直接打开浏览器就行： http://localhost:${port}`);
   console.log(`        要另起一个（例如换端口）：  sp-mp\\start-windows.cmd --port ${port + 1}`);
@@ -85,7 +139,12 @@ try {
     port,
     host,
     publicDir: path.join(MP, 'public'),
+    dataDir: path.join(ROOT, 'data'),
+    packsDir: path.join(ROOT, 'packs'),
     sharedDir: path.join(MP, 'shared'),
+    simDir: path.join(MP, 'sim'),
+    poolTools: true,
+    spMp,
   });
 } catch (e) {
   if (e && e.code === 'EADDRINUSE') {
@@ -97,4 +156,3 @@ try {
   }
   throw e;
 }
-
